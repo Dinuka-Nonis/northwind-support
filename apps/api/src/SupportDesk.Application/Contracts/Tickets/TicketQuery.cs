@@ -6,8 +6,8 @@ namespace SupportDesk.Application.Contracts.Tickets;
 /// Filters, sorting and paging for the ticket list. Bound directly from the query string.
 /// </summary>
 /// <remarks>
-/// The web app already sends every filter below, but the API only sorts and pages so far: the
-/// filters are part of the contract and still have to be applied server-side.
+/// Every filter below is applied in the database (see <c>TicketQueries.ApplyFilters</c>), before
+/// the count and the paging. Supplied filters combine with AND.
 /// </remarks>
 public sealed record TicketQuery
 {
@@ -38,10 +38,14 @@ public sealed record TicketQuery
     /// <summary>asc | desc.</summary>
     public string SortDirection { get; init; } = "desc";
 
-    /// <summary>Page and page size clamped to something a database can serve.</summary>
+    /// <summary>
+    /// Page and page size clamped to something a database can serve, and the search text trimmed
+    /// (blank becomes null, so "no search" has exactly one representation).
+    /// </summary>
     public TicketQuery Normalized() => this with
     {
         Page = Page < 1 ? 1 : Page,
-        PageSize = PageSize < 1 ? 20 : Math.Min(PageSize, MaxPageSize)
+        PageSize = PageSize < 1 ? 20 : Math.Min(PageSize, MaxPageSize),
+        Search = string.IsNullOrWhiteSpace(Search) ? null : Search.Trim()
     };
 }

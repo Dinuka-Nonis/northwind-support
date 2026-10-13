@@ -17,19 +17,18 @@ namespace SupportDesk.Infrastructure.Queries;
 public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQueries
 {
     /// <remarks>
-    /// Sorts and pages every ticket. The filter values bound into <paramref name="query"/>
-    /// (search, status, priority, category, customer, agent, unassigned-only) are not applied
-    /// yet: server-side filtering is still to be built.
+    /// Filters, then counts, then sorts and pages, all in the database. The order matters: the
+    /// count must describe the filtered set, or the pager lies.
     /// </remarks>
     public async Task<PagedResult<TicketListItemDto>> GetPagedAsync(TicketQuery query, CancellationToken ct)
     {
-        var tickets = TicketsWithLabels();
+        var filtered = ApplyFilters(TicketsWithLabels(), query);
 
-        var totalCount = await tickets.CountAsync(ct);
+        var totalCount = await filtered.CountAsync(ct);
 
         var now = clock.UtcNow;
 
-        var items = await ApplySort(tickets, query)
+        var items = await ApplySort(filtered, query)
             .Skip((query.Page - 1) * query.PageSize)
             .Take(query.PageSize)
             .Select(x => new TicketListItemDto
@@ -116,6 +115,56 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
         join category in db.Set<Category>() on ticket.CategoryId equals category.Id
         from agent in db.Set<Agent>().Where(a => a.Id == ticket.AssignedAgentId).DefaultIfEmpty()
         select new TicketWithLabels { Ticket = ticket, Customer = customer, Category = category, Agent = agent };
+
+    /// <summary>
+    /// One <c>if</c> per filter, all ANDed. Everything stays an <see cref="IQueryable{T}"/>, so
+    /// the database does the work. A further filter (e.g. Task 2's SLA status) is one more
+    /// <c>if</c> here plus a property on <see cref="TicketQuery"/>.
+    /// </summary>
+    private static IQueryable<TicketWithLabels> ApplyFilters(IQueryable<TicketWithLabels> source, TicketQuery query)
+    {
+        if (query.Status is { } status)
+        {
+            source = source.Where(x => x.Ticket.Status == status);
+        }
+
+        if (query.Priority is { } priority)
+        {
+            source = source.Where(x => x.Ticket.Priority == priority);
+        }
+
+        if (query.CategoryId is { } categoryId)
+        {
+            source = source.Where(x => x.Ticket.CategoryId == categoryId);
+        }
+
+        if (query.CustomerId is { } customerId)
+        {
+            source = source.Where(x => x.Ticket.CustomerId == customerId);
+        }
+
+        if (query.AssignedAgentId is { } agentId)
+        {
+            source = source.Where(x => x.Ticket.AssignedAgentId == agentId);
+        }
+
+        if (query.UnassignedOnly)
+        {
+            source = source.Where(x => x.Ticket.AssignedAgentId == null);
+        }
+
+        // Search is trimmed and blank-to-null in TicketQuery.Normalized(); the guard here keeps a
+        // query that skipped normalization from turning "   " into a match-nothing filter.
+        if (query.Search?.Trim() is { Length: > 0 } search)
+        {
+            source = source.Where(x =>
+                x.Ticket.Title.Contains(search) ||
+                x.Ticket.Reference.Contains(search) ||
+                x.Customer.Name.Contains(search));
+        }
+
+        return source;
+    }
 
     private static IQueryable<TicketWithLabels> ApplySort(IQueryable<TicketWithLabels> source, TicketQuery query)
     {
