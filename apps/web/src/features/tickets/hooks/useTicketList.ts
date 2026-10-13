@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
-import { ApiError } from '../../../api/client';
+import { useCallback, useEffect, useState } from 'react';
 import { ticketsApi } from '../../../api/tickets';
-import type { PagedResult, TicketFilters, TicketListItem } from '../../../types/api';
+import { useAsyncData } from '../../../hooks/useAsyncData';
+import type { TicketFilters } from '../../../types/api';
 
 const DEBOUNCE_MS = 300;
 
@@ -19,40 +19,51 @@ export const emptyFilters: TicketFilters = {
   sortDirection: 'desc',
 };
 
-interface State {
-  isLoading: boolean;
-  data?: PagedResult<TicketListItem>;
-  error?: string;
-}
-
-/** Owns the ticket list's filters and the data they produce. */
 export function useTicketList() {
   const [filters, setFilters] = useState<TicketFilters>(emptyFilters);
-  const [state, setState] = useState<State>({ isLoading: true });
-
-  const load = async () => {
-    setState((current) => ({ ...current, isLoading: true, error: undefined }));
-
-    try {
-      const data = await ticketsApi.getTickets(filters);
-      setState({ isLoading: false, data, error: undefined });
-    } catch (error) {
-      const message = error instanceof ApiError ? error.message : 'Unable to load tickets.';
-      setState((current) => ({ ...current, isLoading: false, error: message }));
-    }
-  };
+  const [searchText, setSearchText] = useState(emptyFilters.search);
 
   useEffect(() => {
-    const handle = window.setTimeout(load, DEBOUNCE_MS);
+    if (searchText.trim() === filters.search.trim()) {
+      return;
+    }
+
+    const handle = window.setTimeout(
+      () => setFilters((current) => ({ ...current, search: searchText, page: 1 })),
+      DEBOUNCE_MS,
+    );
 
     return () => window.clearTimeout(handle);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- filters object identity changes every render
-  }, [filters.search, filters.page, filters.pageSize]);
+  }, [searchText, filters.search]);
 
-  const updateFilters = (patch: Partial<TicketFilters>) =>
-    setFilters((current) => ({ ...current, ...patch, page: patch.page ?? 1 }));
+  const load = useCallback(() => ticketsApi.getTickets(filters), [filters]);
+  const { reload, ...state } = useAsyncData(load, 'Unable to load tickets.');
 
-  const resetFilters = () => setFilters(emptyFilters);
+  const updateFilters = useCallback((patch: Partial<TicketFilters>) => {
+    const { search, ...rest } = patch;
 
-  return { filters, updateFilters, resetFilters, reload: load, ...state };
+    if (search !== undefined) {
+      setSearchText(search);
+    }
+
+    if (Object.keys(rest).length > 0) {
+      setFilters((current) => ({ ...current, ...rest, page: rest.page ?? 1 }));
+    }
+  }, []);
+
+  const resetFilters = useCallback(() => {
+    setSearchText(emptyFilters.search);
+    setFilters(emptyFilters);
+  }, []);
+
+  return {
+    // The box shows what the user typed, not the last committed search.
+    filters: { ...filters, search: searchText },
+    updateFilters,
+    resetFilters,
+    reload,
+    isLoading: state.isLoading,
+    data: state.data,
+    error: state.error,
+  };
 }

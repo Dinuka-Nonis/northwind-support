@@ -32,12 +32,90 @@ Full requirements are in **[`ASSIGNMENT_CANDIDATE.md`](ASSIGNMENT_CANDIDATE.md)*
 
 ### Submission
 
-1. Update this **README** with what you built, your design decisions (chosen, rejected and why),
-   the defect's root cause, dev login credentials, how to run and test it, AI usage, and known
-   limitations. A reviewer must be able to run it without asking you anything.
-2. Add an **APPROACH.md** explaining your approach and thought process for each task.
-3. Commit both, then send us the **link to your fork**, the **dev login credentials**, and a
-   **rough note of time spent** on what. (If the fork is private, add the reviewers as collaborators.)
+Task 1 is complete. Tasks 2–4 are not started. Details below and in [`APPROACH.md`](APPROACH.md).
+
+**Fork:** https://github.com/Dinuka-Nonis/northwind-support (branch `Task-1`)
+
+#### What was implemented (Task 1)
+
+- **DEFECT-117:** Ticket list requests fire when any filter changes (not only search/page).
+- **Server-side filtering:** `GET /api/tickets` applies all query filters in SQL Server before
+  `totalCount`, paging, and sorting. Regression tests on the web hook and API query layer.
+
+#### Design decisions
+
+| Topic | Chosen | Rejected | Why |
+| --- | --- | --- | --- |
+| When to fetch (web) | `useAsyncData` with a `load` callback keyed on the full `filters` object; search debounced into `filters` separately | Keeping a manual `useEffect` with a partial dependency list; remount keys / forced reload | Partial deps caused the bug. Remount/reload hides stale state instead of fixing it. |
+| Search UX | 300 ms debounce on committed `filters.search`; dropdowns commit immediately | Debouncing every filter | Spec requires immediate requests for non-search filters. |
+| Where filters run (API) | `ApplyFilters` on `IQueryable`, then `CountAsync`, then sort/page | Filtering in memory after `ToListAsync` | FL-5: count and pager must match the filtered set in the database. |
+| Search normalization | Trim and blank→null in `TicketQuery.Normalized()` | Only trim in SQL | One representation of “no search”; avoids accidental match-nothing filters. |
+| Filter tests (API) | In-memory SQLite + EF command interceptor | Pure mocked `DbSet` | Confirms EF translates filters to SQL, not just LINQ-to-objects. |
+
+#### DEFECT-117 — root cause and verification
+
+**Root cause:** The ticket list `useEffect` only depended on `filters.search`, `filters.page`, and
+`filters.pageSize`. Changing status (or other filters) updated state but did not run `load`, so no
+request went out until search or paging changed.
+
+**Fix:** Load when committed `filters` change (`useCallback` + `useAsyncData`), with search still
+debounced before it enters `filters`.
+
+**Verify manually:** Open the web app → change Status to *In progress* → Network tab shows an
+immediate `GET /api/tickets?...status=InProgress`. Type in search → one request after ~300 ms idle,
+not one per keystroke.
+
+**Automated:** `apps/web/src/features/tickets/hooks/useTicketList.test.ts` (DEFECT-117).
+
+#### Server-side filtering
+
+- **Where:** `TicketQueries.ApplyFilters` in
+  `apps/api/src/SupportDesk.Infrastructure/Queries/TicketQueries.cs` — filter → count → sort → page.
+- **SQL check:** Unit tests log generated SQL via an EF interceptor; assertions use counts and IDs
+  from seeded SQLite data (`TicketQueriesFilterTests`).
+- **Next filter (e.g. Task 2 `slaStatus`):** Add property on `TicketQuery` and one `if` block in
+  `ApplyFilters`.
+
+#### Development login
+
+Not implemented (Task 3). The API and web app run **without authentication** on a local dev setup.
+
+#### Testing
+
+Use [Quick start](#quick-start) and [Tests](#tests) below. Task 1–specific checks:
+
+```bash
+npm test
+```
+
+- Web: `useTicketList.test.ts` — filter change requests, search debounce, DEFECT-117 regression.
+- API: `TicketQueriesFilterTests` — priority, combined filters, customer-name search, paging counts.
+
+**Manual smoke:** With API + web running, filter by status/priority and confirm the list and page
+count shrink; search for a customer name (e.g. `Contoso`).
+
+#### AI usage
+
+- **Tool:** Claude for exploring the repo, drafting tests, and reviewing EF query shape.
+- **Workflow:** Reproduce DEFECT-117 in the UI → read `useTicketList` → fix → add Vitest regression →
+  implement `ApplyFilters` → add SQLite integration tests → run `npm test`.
+- **Verified manually:** All generated code was run through tests and a quick UI pass
+
+#### Known limitations
+
+- Tasks **2–4** not done (escalation/SLA, login, Docker API image).
+- No login, roles, or API auth yet.
+- Search uses `Contains` (substring match); case follows SQL Server collation on real DB.
+- No dedicated indexes added for filter columns (40 seed tickets only).
+
+#### Time spent (rough)
+
+| Area | Hours |
+| --- | --- |
+| DEFECT-117 investigation + fix + web tests | ~1.5 |
+| Server-side filtering + API tests | ~1.5 |
+| README / APPROACH | ~0.5 |
+| **Task 1 total** | **~3.5** |
 
 ---
 
@@ -87,7 +165,7 @@ Both pass on a clean checkout and neither needs a database.
 
 | Endpoint | Description |
 | --- | --- |
-| `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. **Filters are accepted but not applied yet** (Task 1). |
+| `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. Filters applied server-side (Task 1). |
 | `GET /api/tickets/{id}` | One ticket |
 | `POST /api/tickets` | Create a ticket |
 | `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
