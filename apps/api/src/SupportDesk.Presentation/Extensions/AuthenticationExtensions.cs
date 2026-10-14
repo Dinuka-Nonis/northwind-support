@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 using SupportDesk.Application.Abstractions;
@@ -9,8 +10,9 @@ namespace SupportDesk.Presentation.Extensions;
 public static class AuthenticationExtensions
 {
     /// <summary>
-    /// Registers token issuing and bearer-token validation. The <c>Jwt</c> settings are read and
-    /// checked here, so a missing or weak key stops the app at startup.
+    /// Registers token issuing, bearer-token validation and the rule that every endpoint needs a
+    /// signed-in user. The <c>Jwt</c> settings are read and checked here, so a missing or weak key
+    /// stops the app at startup.
     /// </summary>
     public static IServiceCollection AddJwtAuthentication(this IServiceCollection services, IConfiguration configuration)
     {
@@ -53,7 +55,16 @@ public static class AuthenticationExtensions
                 };
             });
 
-        services.AddAuthorization();
+        services.AddAuthorization(authorization =>
+        {
+            // The fallback policy applies to every endpoint that has no authorization of its own,
+            // so a controller added tomorrow is closed without anyone remembering [Authorize].
+            // Opening an endpoint is the deliberate act: [AllowAnonymous], as on POST /api/auth/login.
+            // Swagger stays open because it is middleware, not an endpoint, so this policy never sees it.
+            authorization.FallbackPolicy = new AuthorizationPolicyBuilder()
+                .RequireAuthenticatedUser()
+                .Build();
+        });
 
         return services;
     }
