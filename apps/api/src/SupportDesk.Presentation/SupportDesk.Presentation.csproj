@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" />
     <PackageReference Include="Swashbuckle.AspNetCore" />
     <!-- Required for the EF Core CLI to use this project as its startup project. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
