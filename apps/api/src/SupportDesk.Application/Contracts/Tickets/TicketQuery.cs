@@ -32,6 +32,12 @@ public sealed record TicketQuery
 
     public bool UnassignedOnly { get; init; }
 
+    /// <summary>
+    /// The derived SLA status: NotApplicable | WithinSla | AtRisk | Breached | Met. It is not a
+    /// stored column, so the database works it out from the dates (see <c>TicketQueries</c>).
+    /// </summary>
+    public SlaStatus? SlaStatus { get; init; }
+
     /// <summary>createdAtUtc | updatedAtUtc | dueAtUtc | priority | status.</summary>
     public string SortBy { get; init; } = "createdAtUtc";
 

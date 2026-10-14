@@ -5,6 +5,7 @@ import { Spinner } from '../../components/Spinner';
 import { useReferenceData } from '../../hooks/useReferenceData';
 import type { TicketDetail } from '../../types/api';
 import { CreateTicketForm } from './components/CreateTicketForm';
+import { TriageSummary } from './components/TriageSummary';
 
 export function CreateTicketPage() {
   const reference = useReferenceData();
@@ -33,6 +34,9 @@ export function CreateTicketPage() {
           <p>
             Raised <strong>{created.reference}</strong> for {created.customer.name}.
           </p>
+
+          {created.triage && <TriageSummary triage={created.triage} />}
+
           <div className="button-row">
             <button
               type="button"

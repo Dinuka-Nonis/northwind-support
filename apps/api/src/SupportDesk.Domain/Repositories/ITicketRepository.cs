@@ -15,4 +15,7 @@ public interface ITicketRepository
     Task<string> NextReferenceAsync(CancellationToken ct);
 
     Task AddAsync(Ticket ticket, CancellationToken ct);
+
+    /// <summary>Stages a history row returned by <see cref="Ticket.Escalate"/>, to be saved with the ticket.</summary>
+    Task AddEscalationAsync(TicketEscalation escalation, CancellationToken ct);
 }

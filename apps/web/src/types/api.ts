@@ -64,6 +64,17 @@ export interface TicketListItem {
   slaStatus: SlaStatus;
 }
 
+/** What the triage rules decided for a new ticket, and why. Only sent when a ticket is created. */
+export interface TriageResult {
+  priority: TicketPriority;
+  priorityReason: string;
+  dueAtUtc: string;
+  slaWindowHours: number;
+  slaReason: string;
+  assignedAgent: AgentSummary | null;
+  assignmentReason: string;
+}
+
 export interface TicketDetail {
   id: number;
   reference: string;
@@ -79,6 +90,35 @@ export interface TicketDetail {
   dueAtUtc: string | null;
   resolvedAtUtc: string | null;
   slaStatus: SlaStatus;
+  /** Present only on the response to creating a ticket. */
+  triage?: TriageResult;
+}
+
+/** One row of a ticket's escalation history, as the API returns it (newest first). */
+export interface TicketEscalation {
+  id: number;
+  fromPriority: TicketPriority;
+  toPriority: TicketPriority;
+  fromDueAtUtc: string | null;
+  toDueAtUtc: string;
+  fromAgent: AgentSummary | null;
+  toAgent: AgentSummary | null;
+  reason: string;
+  escalatedBy: string;
+  escalatedAtUtc: string;
+}
+
+export interface EscalateTicketPayload {
+  reason: string;
+  escalatedBy: string;
+}
+
+/** The response to escalating: the ticket as it is now, the new history row, and why. */
+export interface EscalationResult {
+  ticket: TicketDetail;
+  escalation: TicketEscalation;
+  slaReason: string;
+  assignmentReason: string;
 }
 
 /** Everything the ticket list screen can narrow the results by. */
@@ -86,6 +126,7 @@ export interface TicketFilters {
   search: string;
   status?: TicketStatus;
   priority?: TicketPriority;
+  slaStatus?: SlaStatus;
   categoryId?: number;
   customerId?: number;
   assignedAgentId?: number;

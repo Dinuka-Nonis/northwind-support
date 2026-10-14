@@ -257,6 +257,67 @@ public sealed class TicketQueriesFilterTests : IDisposable
         Assert.True(page.IndexOf("WHERE", StringComparison.Ordinal) < page.IndexOf("ORDER BY", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task GetEscalationsAsync_ReturnsTheNewestFirst_WithBeforeAndAfterValues()
+    {
+        // TCK-0004 is Medium and Alex's. Two escalations an hour apart: Ben takes it, then nobody
+        // is eligible, so it ends up unassigned.
+        var ticket = _db.Set<Ticket>().Single(t => t.Reference == "TCK-0004");
+        var now = FixedClock.DefaultNow;
+
+        var first = ticket.Escalate("Customer chased twice", "Priya Nair", now.AddHours(9), _benId, now.AddHours(1));
+        var second = ticket.Escalate("Now blocking a launch", "Priya Nair", now.AddHours(6), null, now.AddHours(2));
+
+        _db.AddRange(first, second);
+        _db.SaveChanges();
+
+        var history = await Queries().GetEscalationsAsync(ticket.Id, CancellationToken.None);
+
+        Assert.NotNull(history);
+        Assert.Equal(2, history.Count);
+
+        // Newest first: the second escalation, High to Critical, Ben to nobody.
+        Assert.Equal(TicketPriority.High, history[0].FromPriority);
+        Assert.Equal(TicketPriority.Critical, history[0].ToPriority);
+        Assert.Equal("Ben Osei", history[0].FromAgent?.FullName);
+        Assert.Null(history[0].ToAgent);
+        Assert.Equal(now.AddHours(9), history[0].FromDueAtUtc);
+        Assert.Equal(now.AddHours(6), history[0].ToDueAtUtc);
+        Assert.Equal("Now blocking a launch", history[0].Reason);
+        Assert.Equal("Priya Nair", history[0].EscalatedBy);
+        Assert.Equal(now.AddHours(2), history[0].EscalatedAtUtc);
+
+        // Then the first one, Medium to High, Alex to Ben, from a ticket that had no due date.
+        Assert.Equal(TicketPriority.Medium, history[1].FromPriority);
+        Assert.Equal(TicketPriority.High, history[1].ToPriority);
+        Assert.Equal("Alex Turner", history[1].FromAgent?.FullName);
+        Assert.Equal("Ben Osei", history[1].ToAgent?.FullName);
+        Assert.Null(history[1].FromDueAtUtc);
+    }
+
+    [Fact]
+    public async Task GetEscalationsAsync_OnlyReturnsThatTicketsHistory()
+    {
+        var escalated = _db.Set<Ticket>().Single(t => t.Reference == "TCK-0008");
+        var other = _db.Set<Ticket>().Single(t => t.Reference == "TCK-0003");
+
+        _db.Add(escalated.Escalate("Customer chased twice", "Priya Nair", FixedClock.DefaultNow.AddHours(24), null, FixedClock.DefaultNow));
+        _db.SaveChanges();
+
+        var history = await Queries().GetEscalationsAsync(other.Id, CancellationToken.None);
+
+        Assert.NotNull(history);
+        Assert.Empty(history);
+    }
+
+    [Fact]
+    public async Task GetEscalationsAsync_ForATicketThatDoesNotExist_IsNull_NotAnEmptyList()
+    {
+        var history = await Queries().GetEscalationsAsync(9999, CancellationToken.None);
+
+        Assert.Null(history);
+    }
+
     public void Dispose()
     {
         _db.Dispose();
@@ -264,7 +325,9 @@ public sealed class TicketQueriesFilterTests : IDisposable
     }
 
     private Task<PagedResult<TicketListItemDto>> Run(TicketQuery query) =>
-        new TicketQueries(_db, new FixedClock()).GetPagedAsync(query.Normalized(), CancellationToken.None);
+        Queries().GetPagedAsync(query.Normalized(), CancellationToken.None);
+
+    private TicketQueries Queries() => new(_db, new FixedClock(), TestSlaPolicy.Default());
 
     private static IEnumerable<string> Refs(PagedResult<TicketListItemDto> result) =>
         result.Items.Select(item => item.Reference);
@@ -313,5 +376,149 @@ public sealed class TicketQueriesFilterTests : IDisposable
 
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
+    }
+}
+
+/// <summary>
+/// The SLA status filter, run against in-memory SQLite like the other filters.
+/// </summary>
+/// <remarks>
+/// NotApplicable, Met and Breached are plain date comparisons, so SQLite can run them. AtRisk and
+/// WithinSla use <c>DATEDIFF</c>, which only SQL Server has, so they are checked by hand against
+/// SQL Server (see the README) rather than here. "Now" is 2026-03-02 09:00 UTC (the FixedClock).
+/// </remarks>
+public sealed class TicketQueriesSlaFilterTests : IDisposable
+{
+    private readonly SqliteConnection _connection = new("DataSource=:memory:");
+    private readonly SupportDbContext _db;
+    private readonly Customer _customer;
+    private readonly Category _category;
+
+    public TicketQueriesSlaFilterTests()
+    {
+        _connection.Open();
+
+        _db = new SupportDbContext(new DbContextOptionsBuilder<SupportDbContext>()
+            .UseSqlite(_connection)
+            .Options);
+        _db.Database.EnsureCreated();
+
+        _customer = new Customer("Fabrikam", "ops@fabrikam.test", null, CustomerTier.Standard, FixedClock.DefaultNow);
+        _category = new Category("Billing", requiresSpecialist: false, forcesCriticalPriority: false);
+
+        _db.AddRange(_customer, _category);
+        _db.SaveChanges();
+
+        var now = FixedClock.DefaultNow;
+
+        // reference, status, due, resolved. Every ticket was created 4 h before "now".
+        Seed("TCK-0001", TicketStatus.Open,     due: null,                    resolved: null);                 // no SLA
+        Seed("TCK-0002", TicketStatus.Resolved, due: null,                    resolved: now.AddHours(-1));     // no SLA, resolved
+        Seed("TCK-0003", TicketStatus.Resolved, due: now.AddHours(-1),        resolved: now.AddHours(-2));     // Met, early
+        Seed("TCK-0004", TicketStatus.Resolved, due: now.AddHours(-3),        resolved: now.AddHours(-3));     // Met, exactly on due
+        Seed("TCK-0005", TicketStatus.Resolved, due: now.AddHours(-3),        resolved: now.AddHours(-1));     // Breached, resolved late
+        Seed("TCK-0006", TicketStatus.Open,     due: now.AddHours(-1),        resolved: null);                 // Breached, still open
+        Seed("TCK-0007", TicketStatus.Open,     due: now,                     resolved: null);                 // due right now: not breached yet
+        Seed("TCK-0008", TicketStatus.Open,     due: now.AddHours(10),        resolved: null);                 // WithinSla
+
+        _db.SaveChanges();
+    }
+
+    [Fact]
+    public async Task NotApplicable_ReturnsTicketsWithoutADueDate()
+    {
+        var result = await Run(new TicketQuery { SlaStatus = SlaStatus.NotApplicable });
+
+        Assert.Equal(new[] { "TCK-0001", "TCK-0002" }, Refs(result).Order());
+    }
+
+    [Fact]
+    public async Task Met_ReturnsResolvedOnOrBeforeTheDueDate()
+    {
+        var result = await Run(new TicketQuery { SlaStatus = SlaStatus.Met });
+
+        // TCK-0004 was resolved exactly on its due date, which still counts as met.
+        Assert.Equal(new[] { "TCK-0003", "TCK-0004" }, Refs(result).Order());
+    }
+
+    [Fact]
+    public async Task Breached_ReturnsLateResolutionsAndOpenTicketsPastDue_ButNotOneDueRightNow()
+    {
+        var result = await Run(new TicketQuery { SlaStatus = SlaStatus.Breached });
+
+        // TCK-0007 is due exactly now: not past due yet, so not breached.
+        Assert.Equal(new[] { "TCK-0005", "TCK-0006" }, Refs(result).Order());
+    }
+
+    [Fact]
+    public async Task SlaStatusAndAnotherFilter_AreAnded()
+    {
+        var result = await Run(new TicketQuery { SlaStatus = SlaStatus.Breached, Status = TicketStatus.Resolved });
+
+        Assert.Equal("TCK-0005", Assert.Single(result.Items).Reference);
+        Assert.Equal(1, result.TotalCount);
+    }
+
+    [Fact]
+    public async Task Count_DescribesTheFilteredSet_NotThePage()
+    {
+        var page1 = await Run(new TicketQuery { SlaStatus = SlaStatus.Met, PageSize = 1, Page = 1 });
+        var page2 = await Run(new TicketQuery { SlaStatus = SlaStatus.Met, PageSize = 1, Page = 2 });
+
+        Assert.Equal(2, page1.TotalCount);
+        Assert.Equal(2, page1.TotalPages);
+        Assert.Single(page1.Items);
+        Assert.Single(page2.Items);
+        Assert.NotEqual(Refs(page1).Single(), Refs(page2).Single());
+    }
+
+    [Theory]
+    [InlineData(SlaStatus.NotApplicable)]
+    [InlineData(SlaStatus.Met)]
+    [InlineData(SlaStatus.Breached)]
+    public async Task TheFilter_ReturnsExactlyTheTicketsTheEvaluatorLabelsWithThatStatus(SlaStatus status)
+    {
+        // Guards against the SQL version of the rule drifting from SlaEvaluator.
+        var everything = await Run(new TicketQuery { PageSize = TicketQuery.MaxPageSize });
+        var filtered = await Run(new TicketQuery { SlaStatus = status, PageSize = TicketQuery.MaxPageSize });
+
+        var expected = everything.Items.Where(item => item.SlaStatus == status).Select(item => item.Reference);
+
+        Assert.Equal(expected.Order(), Refs(filtered).Order());
+    }
+
+    public void Dispose()
+    {
+        _db.Dispose();
+        _connection.Dispose();
+    }
+
+    private Task<PagedResult<TicketListItemDto>> Run(TicketQuery query) =>
+        new TicketQueries(_db, new FixedClock(), TestSlaPolicy.Default())
+            .GetPagedAsync(query.Normalized(), CancellationToken.None);
+
+    private static IEnumerable<string> Refs(PagedResult<TicketListItemDto> result) =>
+        result.Items.Select(item => item.Reference);
+
+    private void Seed(string reference, TicketStatus status, DateTime? due, DateTime? resolved)
+    {
+        var now = FixedClock.DefaultNow;
+
+        var ticket = Ticket.Raise(
+            reference,
+            "Something is not working",
+            "A description long enough to be realistic.",
+            _customer.Id,
+            _category.Id,
+            TicketPriority.Medium,
+            now.AddHours(-4),
+            dueAtUtc: due);
+
+        if (status != TicketStatus.New)
+        {
+            ticket.ChangeStatus(status, resolved ?? now);
+        }
+
+        _db.Add(ticket);
     }
 }

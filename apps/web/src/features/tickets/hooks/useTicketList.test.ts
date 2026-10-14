@@ -45,6 +45,7 @@ describe('useTicketList requests (DEFECT-117)', () => {
 
   it.each<[string, Partial<TicketFilters>]>([
     ['priority', { priority: 'High' }],
+    ['SLA status', { slaStatus: 'AtRisk' }],
     ['category', { categoryId: 3 }],
     ['customer', { customerId: 2 }],
     ['assigned agent', { assignedAgentId: 4 }],

@@ -3,35 +3,47 @@ using SupportDesk.Application.Abstractions;
 using SupportDesk.Application.Contracts.Tickets;
 using SupportDesk.Application.Features.Tickets.Commands.AssignTicket;
 using SupportDesk.Application.Features.Tickets.Commands.ChangeTicketStatus;
+using SupportDesk.Application.Features.Tickets.Commands.EscalateTicket;
 using SupportDesk.Application.Features.Tickets.Commands.RaiseTicket;
 using SupportDesk.Application.Features.Tickets.Queries.GetTicket;
+using SupportDesk.Application.Features.Tickets.Triage;
 using SupportDesk.Domain.Aggregates.Agents;
+using SupportDesk.Domain.Aggregates.Categories;
 using SupportDesk.Domain.Aggregates.Customers;
 using SupportDesk.Domain.Aggregates.Tickets;
 using SupportDesk.Domain.Repositories;
+using SupportDesk.Domain.Triage;
 using SupportDesk.UnitTests.TestDoubles;
 
 namespace SupportDesk.UnitTests.Application.Features.Tickets.Commands;
 
 /// <summary>
 /// Shared arrangement for the ticket command tests: mocked repositories and queries, a fixed
-/// clock, and command handlers wired to all of them.
+/// clock, the default SLA policy, and command handlers wired to all of them.
 /// </summary>
+/// <remarks>
+/// By default the customer is Standard, the category has no special rules, and there are no
+/// agents. A test changes only what it is about, with <see cref="ExistingCustomer"/>,
+/// <see cref="ExistingCategory"/> and <see cref="WithCandidates"/>.
+/// </remarks>
 internal sealed class TicketCommandTestContext
 {
     public TicketCommandTestContext()
     {
-        Customers.Setup(c => c.ExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-
-        Categories.Setup(c => c.ExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+        ExistingCustomer();
+        ExistingCategory();
+        WithCandidates();
+        EscalationHistory(RecordedEscalation);
 
         Tickets.Setup(t => t.NextReferenceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync("TCK-0041");
 
         Tickets.Setup(t => t.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()))
             .Callback<Ticket, CancellationToken>((ticket, _) => AddedTicket = ticket)
+            .Returns(Task.CompletedTask);
+
+        Tickets.Setup(t => t.AddEscalationAsync(It.IsAny<TicketEscalation>(), It.IsAny<CancellationToken>()))
+            .Callback<TicketEscalation, CancellationToken>((escalation, _) => AddedEscalation = escalation)
             .Returns(Task.CompletedTask);
 
         // Every command returns the ticket as re-read once its change has been saved.
@@ -46,8 +58,10 @@ internal sealed class TicketCommandTestContext
 
         var getTicket = new GetTicketQueryHandler(TicketQueries.Object);
 
+        Triager = new TicketTriager(Sla, AgentQueries.Object);
+
         RaiseTicket = new RaiseTicketCommandHandler(
-            Tickets.Object, Customers.Object, Categories.Object, UnitOfWork.Object, Clock, getTicket,
+            Tickets.Object, Customers.Object, Categories.Object, Triager, UnitOfWork.Object, Clock, getTicket,
             NullLogger<RaiseTicketCommandHandler>.Instance);
 
         ChangeTicketStatus = new ChangeTicketStatusCommandHandler(Tickets.Object, UnitOfWork.Object, Clock, getTicket);
@@ -55,6 +69,10 @@ internal sealed class TicketCommandTestContext
         AssignTicket = new AssignTicketCommandHandler(
             Tickets.Object, Agents.Object, UnitOfWork.Object, Clock, getTicket,
             NullLogger<AssignTicketCommandHandler>.Instance);
+
+        EscalateTicket = new EscalateTicketCommandHandler(
+            Tickets.Object, Customers.Object, Categories.Object, Triager, TicketQueries.Object, UnitOfWork.Object, Clock,
+            getTicket, NullLogger<EscalateTicketCommandHandler>.Instance);
     }
 
     public Mock<ITicketRepository> Tickets { get; } = new();
@@ -69,7 +87,14 @@ internal sealed class TicketCommandTestContext
 
     public Mock<ITicketQueries> TicketQueries { get; } = new();
 
+    public Mock<IAgentQueries> AgentQueries { get; } = new();
+
     public FixedClock Clock { get; } = new();
+
+    /// <summary>The assignment's SLA numbers: Critical 4 h, High 8 h, Medium 24 h, Low 72 h, Premium half.</summary>
+    public SlaPolicy Sla { get; } = TestSlaPolicy.Default();
+
+    public TicketTriager Triager { get; }
 
     public RaiseTicketCommandHandler RaiseTicket { get; }
 
@@ -77,8 +102,29 @@ internal sealed class TicketCommandTestContext
 
     public AssignTicketCommandHandler AssignTicket { get; }
 
+    public EscalateTicketCommandHandler EscalateTicket { get; }
+
     /// <summary>The ticket handed to the repository by the last create call.</summary>
     public Ticket? AddedTicket { get; private set; }
+
+    /// <summary>The history row handed to the repository by the last escalate call.</summary>
+    public TicketEscalation? AddedEscalation { get; private set; }
+
+    /// <summary>
+    /// The history row the mocked read side returns after a save. Its id is 0, like the id of the
+    /// row the handler saves, because a mocked unit of work assigns no ids.
+    /// </summary>
+    public TicketEscalationDto RecordedEscalation { get; } = new(
+        Id: 0,
+        FromPriority: TicketPriority.Medium,
+        ToPriority: TicketPriority.High,
+        FromDueAtUtc: null,
+        ToDueAtUtc: FixedClock.DefaultNow,
+        FromAgent: null,
+        ToAgent: null,
+        Reason: "Customer is chasing for an update.",
+        EscalatedBy: "Priya Nair",
+        EscalatedAtUtc: FixedClock.DefaultNow);
 
     /// <summary>Makes <see cref="ITicketRepository.GetByIdAsync"/> return this ticket.</summary>
     public Ticket ExistingTicket(Ticket ticket)
@@ -100,6 +146,26 @@ internal sealed class TicketCommandTestContext
 
         Agents.Setup(a => a.GetByIdAsync(id, It.IsAny<CancellationToken>())).ReturnsAsync(agent);
     }
+
+    /// <summary>Makes every customer lookup find a customer of this tier.</summary>
+    public void ExistingCustomer(CustomerTier tier = CustomerTier.Standard) =>
+        Customers.Setup(c => c.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Customer("Contoso Ltd", "support@contoso.example", null, tier, Clock.UtcNow));
+
+    /// <summary>Makes every category lookup find a category with these flags.</summary>
+    public void ExistingCategory(bool requiresSpecialist = false, bool forcesCritical = false) =>
+        Categories.Setup(c => c.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Category("General", requiresSpecialist, forcesCritical));
+
+    /// <summary>The agents the assignment rules get to choose from. None by default.</summary>
+    public void WithCandidates(params AgentCandidate[] candidates) =>
+        AgentQueries.Setup(q => q.GetAssignmentCandidatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<AgentCandidate>)candidates);
+
+    /// <summary>What the mocked read side returns as the ticket's escalation history.</summary>
+    public void EscalationHistory(params TicketEscalationDto[] rows) =>
+        TicketQueries.Setup(q => q.GetEscalationsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<TicketEscalationDto>?)rows);
 
     public void VerifySaved(Times times) =>
         UnitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), times);
