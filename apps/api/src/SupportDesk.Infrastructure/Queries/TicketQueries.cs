@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using SupportDesk.Application.Abstractions;
 using SupportDesk.Application.Contracts.Common;
@@ -23,12 +24,14 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock, SlaPolicy s
     /// </remarks>
     public async Task<PagedResult<TicketListItemDto>> GetPagedAsync(TicketQuery query, CancellationToken ct)
     {
-        var filtered = ApplyFilters(TicketsWithLabels(), query);
-
-        var totalCount = await filtered.CountAsync(ct);
-
+        // One "now" for the whole request, so the SLA filter and the status shown on each row
+        // can never disagree about what time it is.
         var now = clock.UtcNow;
         var atRiskFraction = sla.AtRiskFraction;
+
+        var filtered = ApplyFilters(TicketsWithLabels(), query, now, atRiskFraction);
+
+        var totalCount = await filtered.CountAsync(ct);
 
         var items = await ApplySort(filtered, query)
             .Skip((query.Page - 1) * query.PageSize)
@@ -160,10 +163,14 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock, SlaPolicy s
 
     /// <summary>
     /// One <c>if</c> per filter, all ANDed. Everything stays an <see cref="IQueryable{T}"/>, so
-    /// the database does the work. A further filter (e.g. Task 2's SLA status) is one more
-    /// <c>if</c> here plus a property on <see cref="TicketQuery"/>.
+    /// the database does the work. A further filter is one more <c>if</c> here plus a property
+    /// on <see cref="TicketQuery"/>.
     /// </summary>
-    private static IQueryable<TicketWithLabels> ApplyFilters(IQueryable<TicketWithLabels> source, TicketQuery query)
+    private static IQueryable<TicketWithLabels> ApplyFilters(
+        IQueryable<TicketWithLabels> source,
+        TicketQuery query,
+        DateTime now,
+        double atRiskFraction)
     {
         if (query.Status is { } status)
         {
@@ -205,7 +212,67 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock, SlaPolicy s
                 x.Customer.Name.Contains(search));
         }
 
+        if (query.SlaStatus is { } slaStatus)
+        {
+            source = source.Where(SlaStatusIs(slaStatus, now, atRiskFraction));
+        }
+
         return source;
+    }
+
+    /// <summary>
+    /// The SQL form of <see cref="SlaEvaluator.Evaluate"/>: the same five statuses, worked out
+    /// by the database so that filtering, counting and paging all see the same rows.
+    /// </summary>
+    /// <remarks>
+    /// <c>now</c> is the same value the page projection hands to the evaluator. The two
+    /// open-ticket statuses need date arithmetic, so they use <c>DATEDIFF(second, ...)</c>
+    /// (<c>EF.Functions.DateDiffSecond</c>), which only SQL Server can run. It counts
+    /// whole seconds, so right on the threshold the two can differ by up to a second.
+    /// </remarks>
+    private static Expression<Func<TicketWithLabels, bool>> SlaStatusIs(
+        SlaStatus status,
+        DateTime now,
+        double atRiskFraction)
+    {
+        switch (status)
+        {
+            case SlaStatus.NotApplicable:
+                return x => x.Ticket.DueAtUtc == null;
+
+            case SlaStatus.Met:
+                return x =>
+                    x.Ticket.DueAtUtc != null &&
+                    x.Ticket.ResolvedAtUtc != null &&
+                    x.Ticket.ResolvedAtUtc <= x.Ticket.DueAtUtc;
+
+            case SlaStatus.Breached:
+                return x =>
+                    x.Ticket.DueAtUtc != null &&
+                    ((x.Ticket.ResolvedAtUtc != null && x.Ticket.ResolvedAtUtc > x.Ticket.DueAtUtc) ||
+                     (x.Ticket.ResolvedAtUtc == null && now > x.Ticket.DueAtUtc));
+
+            case SlaStatus.AtRisk:
+                // Open, not yet past due, and no more than the threshold share of the window left.
+                return x =>
+                    x.Ticket.DueAtUtc != null &&
+                    x.Ticket.ResolvedAtUtc == null &&
+                    x.Ticket.DueAtUtc >= now &&
+                    EF.Functions.DateDiffSecond(now, x.Ticket.DueAtUtc) <=
+                        atRiskFraction * EF.Functions.DateDiffSecond(x.Ticket.CreatedAtUtc, x.Ticket.DueAtUtc);
+
+            case SlaStatus.WithinSla:
+                // Open, not yet past due, and more than the threshold share of the window left.
+                return x =>
+                    x.Ticket.DueAtUtc != null &&
+                    x.Ticket.ResolvedAtUtc == null &&
+                    x.Ticket.DueAtUtc >= now &&
+                    EF.Functions.DateDiffSecond(now, x.Ticket.DueAtUtc) >
+                        atRiskFraction * EF.Functions.DateDiffSecond(x.Ticket.CreatedAtUtc, x.Ticket.DueAtUtc);
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown SLA status.");
+        }
     }
 
     private static IQueryable<TicketWithLabels> ApplySort(IQueryable<TicketWithLabels> source, TicketQuery query)
