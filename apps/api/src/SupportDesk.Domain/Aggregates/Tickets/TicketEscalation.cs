@@ -64,7 +64,7 @@ public sealed class TicketEscalation : Entity
 
     public string Reason { get; private set; } = string.Empty;
 
-    /// <summary>Who escalated it. Free text until Task 3 takes it from the sign-in token.</summary>
+    /// <summary>Who escalated it: the signed-in agent's name, taken from the sign-in token.</summary>
     public string EscalatedBy { get; private set; } = string.Empty;
 
     public DateTime EscalatedAtUtc { get; private set; }

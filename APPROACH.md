@@ -1,6 +1,6 @@
 # Approach
 
-How each assignment task was tackled. **Tasks 1 and 2** are finished.
+How each assignment task was tackled. **Tasks 1, 2 and 3** are finished.
 
 ---
 
@@ -80,7 +80,62 @@ hard part is where they go, so I started from that. Three things shaped everythi
 
 ## Task 3: Login and authentication
 
-Not started.
+### 3.1 How I read the task
+
+The app was open to anyone, and the only thing that needs a real identity is the escalation history,
+which until now took a typed name. So I treated three things as the core and kept everything else
+small:
+
+1. **A password must be hard to steal and a failure must say nothing.** The hash is slow and salted,
+   and every way of failing returns the same answer.
+2. **The server decides who is allowed in, once.** If each controller has to remember to check, one
+   will eventually forget.
+3. **The signed-in agent is a fact from the token, never from the request.** Anything the client can
+   type, the client can fake.
+
+### 3.2 Where I put things, and why
+
+- **Domain** only gains the `PasswordHash` on `Agent`, with one method that rejects a blank hash.
+- **Application** owns the login rules (`LoginCommandHandler`) and two small seams: `IPasswordHasher`
+  and `ITokenIssuer`. They are real seams: the hash algorithm and the token format can change without
+  touching the rules, and the rules are tested with the real hasher and a mocked issuer.
+- **Infrastructure** has the BCrypt hasher and the narrow, read-only lookup for sign-in.
+- **Presentation** is the only layer that knows about JWT: the options, the issuer, the bearer setup,
+  the fallback policy and the claim readers. Application never sees a token library.
+- **Web** keeps the session in one small module with no React in it, the API client reads it, and a
+  provider turns it into React state. A `401` is handled in one place, the client, not in each screen.
+
+### 3.3 The decisions I thought hardest about
+
+- **A column, not a Users table.** Each login is one agent and there are no roles. A second table
+  would only add a join. It would be the right move if other kinds of user appeared.
+- **A fallback policy, not `[Authorize]` everywhere.** Closed by default means a new controller cannot
+  be left open by mistake. The cost is that Swagger and login need to be called out, and they are.
+- **The token lives in memory.** A saved token can be read by any script on the page. Keeping it in
+  memory means a refresh signs you out, which I accepted and wrote down. The better answer for
+  production is an `httpOnly` cookie or a backend-for-frontend.
+- **60 minutes and no refresh token.** Long enough for a working session, short enough to limit a
+  leaked token. Refresh tokens are out of scope.
+- **One generic failure, with the real reason in the log.** The caller learns nothing about which
+  emails exist, and the team can still see what happened. An unknown email is not logged, because
+  people paste passwords into that box.
+- **A late `401` must not sign out a fresh session.** The client only clears the session when the token
+  the failed call carried is still the current one.
+- **`escalatedBy` was removed from the request, not just ignored.** The type no longer has the field,
+  so it cannot be misused later. The price is a known limit: a name over 100 characters would fail.
+
+### 3.4 How I checked it
+
+- Unit tests for the rules: the hasher, each way login can fail, and the token's claims and exact
+  expiry using the fixed clock.
+- An enforcement test on a small host that calls the real `AddJwtAuthentication`. It has an endpoint
+  with no `[Authorize]`, so a `401` there can only come from the fallback policy. No token, an expired
+  token, a tampered one and one signed with another key are all refused.
+- Web tests for the behaviour that matters: the token is attached, a `401` clears the session, a
+  signed-out visit goes to login and comes back, and invalid input never reaches the API.
+- By hand against a running API: a ticket call with and without the token, the same `401` for a wrong
+  email and a wrong password, inactive Yuki refused, only hashes in the table, and the redirect to login
+  and back in the browser.
 
 ---
 

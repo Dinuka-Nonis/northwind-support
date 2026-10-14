@@ -25,8 +25,11 @@ builder.Services.AddCors(options => options.AddPolicy(
         .AllowAnyHeader()
         .AllowAnyMethod()));
 
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerWithBearerAuth();
+
+// Token issuing and bearer validation. The Jwt settings (including the signing key) are checked
+// here, so a missing or weak key stops the app at startup.
+builder.Services.AddJwtAuthentication(builder.Configuration);
 
 // The SLA rules live in configuration, not code. A missing or broken section stops the app at
 // startup instead of failing on the first ticket.
@@ -52,6 +55,11 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors(FrontendCorsPolicy);
+
+// Authentication reads the token and sets the user; authorization then decides what that user
+// may reach. Both come after CORS (so preflight requests are answered) and before the endpoints.
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapControllers();
 

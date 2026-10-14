@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using SupportDesk.Application.Abstractions;
 using SupportDesk.Application.Contracts.Agents;
+using SupportDesk.Application.Contracts.Auth;
 using SupportDesk.Application.Contracts.Tickets;
 using SupportDesk.Domain.Aggregates.Agents;
 using SupportDesk.Domain.Aggregates.Categories;
@@ -60,4 +61,16 @@ public sealed class AgentQueries(SupportDbContext db) : IAgentQueries
             .Select(r => new AgentCandidate(r.Id, r.FullName, r.IsActive, r.MaxOpenTickets, r.OpenTickets, r.CategoryIds))
             .ToList();
     }
+
+    /// <remarks>
+    /// Read-only and narrow: no tracking, and only the five columns the sign-in check uses. The
+    /// lookup runs on the unique index over Email, so it is a seek, not a scan. Matching follows
+    /// the database collation (case-insensitive on SQL Server's default).
+    /// </remarks>
+    public Task<AgentLoginRecord?> FindForLoginAsync(string email, CancellationToken ct) =>
+        db.Set<Agent>()
+            .AsNoTracking()
+            .Where(a => a.Email == email)
+            .Select(a => new AgentLoginRecord(a.Id, a.FullName, a.Email, a.IsActive, a.PasswordHash))
+            .FirstOrDefaultAsync(ct);
 }

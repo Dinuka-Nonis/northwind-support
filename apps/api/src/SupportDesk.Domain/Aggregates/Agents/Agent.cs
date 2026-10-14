@@ -39,6 +39,16 @@ public sealed class Agent : AggregateRoot
 
     public DateTime CreatedAtUtc { get; private set; }
 
+    /// <summary>
+    /// The agent's password as a salted hash, never the password itself. Null until one is set,
+    /// and an agent with no hash cannot sign in.
+    /// </summary>
+    /// <remarks>
+    /// The domain only stores the value. Producing and checking it is the job of
+    /// <c>IPasswordHasher</c>, so no hashing library reaches this layer.
+    /// </remarks>
+    public string? PasswordHash { get; private set; }
+
     /// <summary>The ticket categories this agent is qualified for.</summary>
     public IReadOnlyCollection<AgentSpecialization> Specializations => _specializations;
 
@@ -55,4 +65,12 @@ public sealed class Agent : AggregateRoot
 
     /// <summary>Stops the agent from taking new work. Their history is kept.</summary>
     public void Deactivate() => IsActive = false;
+
+    /// <summary>Stores the hash of the agent's password. A blank value is rejected.</summary>
+    public void SetPasswordHash(string passwordHash)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(passwordHash);
+
+        PasswordHash = passwordHash;
+    }
 }

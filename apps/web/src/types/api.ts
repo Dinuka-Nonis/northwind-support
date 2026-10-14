@@ -108,9 +108,9 @@ export interface TicketEscalation {
   escalatedAtUtc: string;
 }
 
+/** What the form sends. Who escalated is not in it: the API reads that from the sign-in token. */
 export interface EscalateTicketPayload {
   reason: string;
-  escalatedBy: string;
 }
 
 /** The response to escalating: the ticket as it is now, the new history row, and why. */
@@ -143,6 +143,26 @@ export interface CreateTicketPayload {
   customerId: number;
   categoryId: number;
   requestedPriority?: TicketPriority;
+}
+
+/** Body of POST /api/auth/login. */
+export interface LoginPayload {
+  email: string;
+  password: string;
+}
+
+/** The signed-in agent, as the login response and GET /api/auth/me describe them. */
+export interface CurrentUser {
+  id: number;
+  fullName: string;
+  email: string;
+}
+
+/** What a successful login returns: the token, when it stops working, and who signed in. */
+export interface LoginResponse {
+  token: string;
+  expiresAtUtc: string;
+  user: CurrentUser;
 }
 
 export interface Agent {

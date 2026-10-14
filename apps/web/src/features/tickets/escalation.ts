@@ -4,7 +4,6 @@ import type { TicketDetail, TicketPriority } from '../../types/api';
 /** The same limits as the API's escalation validator, measured after trimming. */
 export const REASON_MIN_LENGTH = 5;
 export const REASON_MAX_LENGTH = 500;
-export const ESCALATED_BY_MAX_LENGTH = 100;
 
 const priorityOrder: TicketPriority[] = ['Low', 'Medium', 'High', 'Critical'];
 
@@ -15,7 +14,6 @@ export function nextPriority(priority: TicketPriority): TicketPriority | undefin
 
 export interface EscalationInput {
   reason: string;
-  escalatedBy: string;
 }
 
 export type EscalationErrors = Partial<Record<keyof EscalationInput, string>>;
@@ -24,18 +22,11 @@ export type EscalationErrors = Partial<Record<keyof EscalationInput, string>>;
 export function validateEscalation(input: EscalationInput): EscalationErrors {
   const errors: EscalationErrors = {};
   const reasonLength = input.reason.trim().length;
-  const escalatedByLength = input.escalatedBy.trim().length;
 
   if (reasonLength < REASON_MIN_LENGTH) {
     errors.reason = `Give a reason of at least ${REASON_MIN_LENGTH} characters.`;
   } else if (reasonLength > REASON_MAX_LENGTH) {
     errors.reason = `The reason must be at most ${REASON_MAX_LENGTH} characters.`;
-  }
-
-  if (escalatedByLength < 1) {
-    errors.escalatedBy = 'Say who is escalating this ticket.';
-  } else if (escalatedByLength > ESCALATED_BY_MAX_LENGTH) {
-    errors.escalatedBy = `The name must be at most ${ESCALATED_BY_MAX_LENGTH} characters.`;
   }
 
   return errors;

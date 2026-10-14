@@ -33,6 +33,13 @@ public sealed class ExceptionHandlingMiddleware(
 
             await WriteAsync(context, problem, StatusCodes.Status400BadRequest);
         }
+        catch (InvalidCredentialsException exception)
+        {
+            // The message is the same for every cause, so nothing is revealed about which
+            // emails exist. The handler has already logged the real reason.
+            await WriteAsync(context, Problem("Unauthorized", exception.Message, StatusCodes.Status401Unauthorized),
+                StatusCodes.Status401Unauthorized);
+        }
         catch (NotFoundException exception)
         {
             await WriteAsync(context, Problem("Not Found", exception.Message, StatusCodes.Status404NotFound),

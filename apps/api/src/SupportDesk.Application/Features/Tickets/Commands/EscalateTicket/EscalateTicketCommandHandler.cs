@@ -26,11 +26,22 @@ public sealed class EscalateTicketCommandHandler(
     GetTicketQueryHandler getTicket,
     ILogger<EscalateTicketCommandHandler> logger)
 {
+    /// <param name="id">The ticket to escalate.</param>
+    /// <param name="request">The reason.</param>
+    /// <param name="escalatedBy">
+    /// Who is escalating it. The caller passes the signed-in agent's name, taken from the token,
+    /// so it never comes from the request body.
+    /// </param>
+    /// <param name="ct">Cancels the work if the caller goes away.</param>
     /// <exception cref="NotFoundException">The ticket (or its customer or category) does not exist.</exception>
     /// <exception cref="BusinessRuleViolationException">
     /// The ticket is Resolved or Closed, or is already Critical. Nothing is saved.
     /// </exception>
-    public async Task<EscalationResultDto> HandleAsync(int id, EscalateTicketRequest request, CancellationToken ct)
+    public async Task<EscalationResultDto> HandleAsync(
+        int id,
+        EscalateTicketRequest request,
+        string escalatedBy,
+        CancellationToken ct)
     {
         var ticket = await tickets.GetByIdAsync(id, ct) ?? throw new NotFoundException("Ticket", id);
 
@@ -57,7 +68,7 @@ public sealed class EscalateTicketCommandHandler(
 
         var escalation = ticket.Escalate(
             request.Reason,
-            request.EscalatedBy,
+            escalatedBy,
             triage.Sla.DueAtUtc,
             triage.Assignment.AgentId,
             now);

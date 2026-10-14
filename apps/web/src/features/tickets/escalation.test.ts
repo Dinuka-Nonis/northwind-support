@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { TicketPriority, TicketStatus } from '../../types/api';
 import { canEscalate, nextPriority, validateEscalation } from './escalation';
 
-const valid = { reason: 'Customer chased twice', escalatedBy: 'Priya Nair' };
+const valid = { reason: 'Customer chased twice' };
 
 describe('validateEscalation', () => {
-  it('accepts a reason and a name', () => {
+  it('accepts a reason', () => {
     expect(validateEscalation(valid)).toEqual({});
   });
 
@@ -24,17 +24,6 @@ describe('validateEscalation', () => {
     expect(validateEscalation({ ...valid, reason: '   ab   ' }).reason).toBeDefined();
     expect(validateEscalation({ ...valid, reason: '          ' }).reason).toBeDefined();
     expect(validateEscalation({ ...valid, reason: `  ${'x'.repeat(500)}  ` }).reason).toBeUndefined();
-  });
-
-  it.each<[string, boolean]>([
-    ['', true],
-    ['   ', true],
-    ['x'.repeat(100), false],
-    ['x'.repeat(101), true],
-  ])('a name of %j is rejected: %s', (name, rejected) => {
-    const errors = validateEscalation({ ...valid, escalatedBy: name });
-
-    expect('escalatedBy' in errors).toBe(rejected);
   });
 });
 

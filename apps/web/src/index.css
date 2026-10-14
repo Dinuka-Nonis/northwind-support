@@ -525,3 +525,33 @@ textarea[aria-invalid='true'] {
   margin: 0 0 8px;
   font-size: 1rem;
 }
+
+.app__user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.app__user-name {
+  font-weight: 600;
+}
+
+.login {
+  display: flex;
+  justify-content: center;
+  padding: 64px 24px;
+}
+
+.login__card {
+  width: 100%;
+  max-width: 420px;
+}
+
+.login__card h1 {
+  margin-bottom: 4px;
+}
+
+.login__card .form .field {
+  max-width: none;
+}

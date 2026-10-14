@@ -8,6 +8,7 @@ using SupportDesk.Application.Features.Tickets.Commands.RaiseTicket;
 using SupportDesk.Application.Features.Tickets.Queries.GetTicket;
 using SupportDesk.Application.Features.Tickets.Queries.GetTicketEscalations;
 using SupportDesk.Application.Features.Tickets.Queries.SearchTickets;
+using SupportDesk.Presentation.Extensions;
 
 namespace SupportDesk.Presentation.Controllers;
 
@@ -61,7 +62,8 @@ public sealed class TicketsController : ControllerBase
 
     /// <summary>
     /// Raises the ticket's priority one level, recomputes its due date and re-evaluates its
-    /// owner, and records who did it and why. 409 for a Critical, Resolved or Closed ticket.
+    /// owner, and records who did it and why. Who is the signed-in agent, read from the token.
+    /// 409 for a Critical, Resolved or Closed ticket.
     /// </summary>
     [HttpPost("{id:int}/escalate")]
     public Task<EscalationResultDto> Escalate(
@@ -69,7 +71,7 @@ public sealed class TicketsController : ControllerBase
         EscalateTicketRequest request,
         [FromServices] EscalateTicketCommandHandler handler,
         CancellationToken ct) =>
-        handler.HandleAsync(id, request, ct);
+        handler.HandleAsync(id, request, User.GetAgentName(), ct);
 
     /// <summary>The ticket's escalation history, newest first.</summary>
     [HttpGet("{id:int}/escalations")]
