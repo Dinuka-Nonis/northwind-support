@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using SupportDesk.Application;
+using SupportDesk.Domain.Triage;
 using SupportDesk.Infrastructure;
 using SupportDesk.Presentation.Extensions;
 using SupportDesk.Presentation.Filters;
@@ -26,6 +27,13 @@ builder.Services.AddCors(options => options.AddPolicy(
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+// The SLA rules live in configuration, not code. A missing or broken section stops the app at
+// startup instead of failing on the first ticket.
+var slaPolicy = builder.Configuration.GetSection("Sla").Get<SlaPolicy>()
+    ?? throw new InvalidOperationException("The 'Sla' configuration section is missing.");
+slaPolicy.EnsureValid();
+builder.Services.AddSingleton(slaPolicy);
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
