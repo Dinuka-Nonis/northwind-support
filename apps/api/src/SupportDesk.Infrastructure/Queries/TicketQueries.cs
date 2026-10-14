@@ -113,6 +113,41 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock, SlaPolicy s
             .ToListAsync(ct);
     }
 
+    /// <remarks>
+    /// Newest first, with the agents' names joined in on the read side. The ticket id leads the
+    /// <c>IX_TicketEscalations_TicketId_EscalatedAtUtc</c> index and the time is its second
+    /// column, so both the lookup and the ordering are served by the index. Two small queries
+    /// (does the ticket exist, then its history) keep "no such ticket" apart from "no history".
+    /// </remarks>
+    public async Task<IReadOnlyList<TicketEscalationDto>?> GetEscalationsAsync(int ticketId, CancellationToken ct)
+    {
+        var ticketExists = await db.Set<Ticket>().AsNoTracking().AnyAsync(t => t.Id == ticketId, ct);
+
+        if (!ticketExists)
+        {
+            return null;
+        }
+
+        return await (
+            from escalation in db.Set<TicketEscalation>().AsNoTracking()
+            where escalation.TicketId == ticketId
+            from fromAgent in db.Set<Agent>().Where(a => a.Id == escalation.FromAgentId).DefaultIfEmpty()
+            from toAgent in db.Set<Agent>().Where(a => a.Id == escalation.ToAgentId).DefaultIfEmpty()
+            orderby escalation.EscalatedAtUtc descending, escalation.Id descending
+            select new TicketEscalationDto(
+                escalation.Id,
+                escalation.FromPriority,
+                escalation.ToPriority,
+                escalation.FromDueAtUtc,
+                escalation.ToDueAtUtc,
+                fromAgent == null ? null : new AgentSummaryDto(fromAgent.Id, fromAgent.FullName),
+                toAgent == null ? null : new AgentSummaryDto(toAgent.Id, toAgent.FullName),
+                escalation.Reason,
+                escalation.EscalatedBy,
+                escalation.EscalatedAtUtc))
+            .ToListAsync(ct);
+    }
+
     /// <summary>
     /// Every ticket with the rows that label it. Filter and sort this, then project.
     /// </summary>

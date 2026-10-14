@@ -3,6 +3,7 @@ using SupportDesk.Application.Abstractions;
 using SupportDesk.Application.Contracts.Tickets;
 using SupportDesk.Application.Features.Tickets.Commands.AssignTicket;
 using SupportDesk.Application.Features.Tickets.Commands.ChangeTicketStatus;
+using SupportDesk.Application.Features.Tickets.Commands.EscalateTicket;
 using SupportDesk.Application.Features.Tickets.Commands.RaiseTicket;
 using SupportDesk.Application.Features.Tickets.Queries.GetTicket;
 using SupportDesk.Application.Features.Tickets.Triage;
@@ -32,12 +33,17 @@ internal sealed class TicketCommandTestContext
         ExistingCustomer();
         ExistingCategory();
         WithCandidates();
+        EscalationHistory(RecordedEscalation);
 
         Tickets.Setup(t => t.NextReferenceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync("TCK-0041");
 
         Tickets.Setup(t => t.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()))
             .Callback<Ticket, CancellationToken>((ticket, _) => AddedTicket = ticket)
+            .Returns(Task.CompletedTask);
+
+        Tickets.Setup(t => t.AddEscalationAsync(It.IsAny<TicketEscalation>(), It.IsAny<CancellationToken>()))
+            .Callback<TicketEscalation, CancellationToken>((escalation, _) => AddedEscalation = escalation)
             .Returns(Task.CompletedTask);
 
         // Every command returns the ticket as re-read once its change has been saved.
@@ -63,6 +69,10 @@ internal sealed class TicketCommandTestContext
         AssignTicket = new AssignTicketCommandHandler(
             Tickets.Object, Agents.Object, UnitOfWork.Object, Clock, getTicket,
             NullLogger<AssignTicketCommandHandler>.Instance);
+
+        EscalateTicket = new EscalateTicketCommandHandler(
+            Tickets.Object, Customers.Object, Categories.Object, Triager, TicketQueries.Object, UnitOfWork.Object, Clock,
+            getTicket, NullLogger<EscalateTicketCommandHandler>.Instance);
     }
 
     public Mock<ITicketRepository> Tickets { get; } = new();
@@ -92,8 +102,29 @@ internal sealed class TicketCommandTestContext
 
     public AssignTicketCommandHandler AssignTicket { get; }
 
+    public EscalateTicketCommandHandler EscalateTicket { get; }
+
     /// <summary>The ticket handed to the repository by the last create call.</summary>
     public Ticket? AddedTicket { get; private set; }
+
+    /// <summary>The history row handed to the repository by the last escalate call.</summary>
+    public TicketEscalation? AddedEscalation { get; private set; }
+
+    /// <summary>
+    /// The history row the mocked read side returns after a save. Its id is 0, like the id of the
+    /// row the handler saves, because a mocked unit of work assigns no ids.
+    /// </summary>
+    public TicketEscalationDto RecordedEscalation { get; } = new(
+        Id: 0,
+        FromPriority: TicketPriority.Medium,
+        ToPriority: TicketPriority.High,
+        FromDueAtUtc: null,
+        ToDueAtUtc: FixedClock.DefaultNow,
+        FromAgent: null,
+        ToAgent: null,
+        Reason: "Customer is chasing for an update.",
+        EscalatedBy: "Priya Nair",
+        EscalatedAtUtc: FixedClock.DefaultNow);
 
     /// <summary>Makes <see cref="ITicketRepository.GetByIdAsync"/> return this ticket.</summary>
     public Ticket ExistingTicket(Ticket ticket)
@@ -130,6 +161,11 @@ internal sealed class TicketCommandTestContext
     public void WithCandidates(params AgentCandidate[] candidates) =>
         AgentQueries.Setup(q => q.GetAssignmentCandidatesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<AgentCandidate>)candidates);
+
+    /// <summary>What the mocked read side returns as the ticket's escalation history.</summary>
+    public void EscalationHistory(params TicketEscalationDto[] rows) =>
+        TicketQueries.Setup(q => q.GetEscalationsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<TicketEscalationDto>?)rows);
 
     public void VerifySaved(Times times) =>
         UnitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), times);

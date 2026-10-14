@@ -257,6 +257,67 @@ public sealed class TicketQueriesFilterTests : IDisposable
         Assert.True(page.IndexOf("WHERE", StringComparison.Ordinal) < page.IndexOf("ORDER BY", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task GetEscalationsAsync_ReturnsTheNewestFirst_WithBeforeAndAfterValues()
+    {
+        // TCK-0004 is Medium and Alex's. Two escalations an hour apart: Ben takes it, then nobody
+        // is eligible, so it ends up unassigned.
+        var ticket = _db.Set<Ticket>().Single(t => t.Reference == "TCK-0004");
+        var now = FixedClock.DefaultNow;
+
+        var first = ticket.Escalate("Customer chased twice", "Priya Nair", now.AddHours(9), _benId, now.AddHours(1));
+        var second = ticket.Escalate("Now blocking a launch", "Priya Nair", now.AddHours(6), null, now.AddHours(2));
+
+        _db.AddRange(first, second);
+        _db.SaveChanges();
+
+        var history = await Queries().GetEscalationsAsync(ticket.Id, CancellationToken.None);
+
+        Assert.NotNull(history);
+        Assert.Equal(2, history.Count);
+
+        // Newest first: the second escalation, High to Critical, Ben to nobody.
+        Assert.Equal(TicketPriority.High, history[0].FromPriority);
+        Assert.Equal(TicketPriority.Critical, history[0].ToPriority);
+        Assert.Equal("Ben Osei", history[0].FromAgent?.FullName);
+        Assert.Null(history[0].ToAgent);
+        Assert.Equal(now.AddHours(9), history[0].FromDueAtUtc);
+        Assert.Equal(now.AddHours(6), history[0].ToDueAtUtc);
+        Assert.Equal("Now blocking a launch", history[0].Reason);
+        Assert.Equal("Priya Nair", history[0].EscalatedBy);
+        Assert.Equal(now.AddHours(2), history[0].EscalatedAtUtc);
+
+        // Then the first one, Medium to High, Alex to Ben, from a ticket that had no due date.
+        Assert.Equal(TicketPriority.Medium, history[1].FromPriority);
+        Assert.Equal(TicketPriority.High, history[1].ToPriority);
+        Assert.Equal("Alex Turner", history[1].FromAgent?.FullName);
+        Assert.Equal("Ben Osei", history[1].ToAgent?.FullName);
+        Assert.Null(history[1].FromDueAtUtc);
+    }
+
+    [Fact]
+    public async Task GetEscalationsAsync_OnlyReturnsThatTicketsHistory()
+    {
+        var escalated = _db.Set<Ticket>().Single(t => t.Reference == "TCK-0008");
+        var other = _db.Set<Ticket>().Single(t => t.Reference == "TCK-0003");
+
+        _db.Add(escalated.Escalate("Customer chased twice", "Priya Nair", FixedClock.DefaultNow.AddHours(24), null, FixedClock.DefaultNow));
+        _db.SaveChanges();
+
+        var history = await Queries().GetEscalationsAsync(other.Id, CancellationToken.None);
+
+        Assert.NotNull(history);
+        Assert.Empty(history);
+    }
+
+    [Fact]
+    public async Task GetEscalationsAsync_ForATicketThatDoesNotExist_IsNull_NotAnEmptyList()
+    {
+        var history = await Queries().GetEscalationsAsync(9999, CancellationToken.None);
+
+        Assert.Null(history);
+    }
+
     public void Dispose()
     {
         _db.Dispose();
@@ -264,7 +325,9 @@ public sealed class TicketQueriesFilterTests : IDisposable
     }
 
     private Task<PagedResult<TicketListItemDto>> Run(TicketQuery query) =>
-        new TicketQueries(_db, new FixedClock(), TestSlaPolicy.Default()).GetPagedAsync(query.Normalized(), CancellationToken.None);
+        Queries().GetPagedAsync(query.Normalized(), CancellationToken.None);
+
+    private TicketQueries Queries() => new(_db, new FixedClock(), TestSlaPolicy.Default());
 
     private static IEnumerable<string> Refs(PagedResult<TicketListItemDto> result) =>
         result.Items.Select(item => item.Reference);

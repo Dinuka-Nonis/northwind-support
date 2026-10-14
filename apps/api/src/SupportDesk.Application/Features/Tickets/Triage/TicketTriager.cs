@@ -40,6 +40,29 @@ public sealed class TicketTriager(SlaPolicy sla, IAgentQueries agents)
 
         return new TicketTriage(priority, due, assignment);
     }
+
+    /// <summary>
+    /// BR-7 for a ticket that is about to be escalated: the due date counted from
+    /// <paramref name="nowUtc"/> for its new priority, and its owner afterwards. The current
+    /// agent is kept while they are still active and qualified; otherwise the ticket is
+    /// reassigned exactly as on creation. An unassigned ticket gets an owner chosen the same way.
+    /// </summary>
+    public async Task<EscalationTriage> TriageEscalationAsync(
+        TicketPriority newPriority,
+        CustomerTier tier,
+        int categoryId,
+        bool requiresSpecialist,
+        int? currentAgentId,
+        DateTime nowUtc,
+        CancellationToken ct)
+    {
+        var due = sla.DueAt(newPriority, tier, nowUtc);
+
+        var candidates = await agents.GetAssignmentCandidatesAsync(ct);
+        var assignment = AgentSelector.SelectForEscalation(currentAgentId, candidates, categoryId, requiresSpecialist);
+
+        return new EscalationTriage(due, assignment);
+    }
 }
 
 /// <summary>The triage decision for a new ticket: priority, due date and owner, each with its reason.</summary>
@@ -55,3 +78,6 @@ public sealed record TicketTriage(PriorityDecision Priority, SlaDueDate Sla, Ass
         Assignment.Agent is { } agent ? new AgentSummaryDto(agent.Id, agent.Name) : null,
         Assignment.Reason);
 }
+
+/// <summary>The decision for an escalated ticket: the new due date and the owner, each with its reason.</summary>
+public sealed record EscalationTriage(SlaDueDate Sla, AssignmentDecision Assignment);

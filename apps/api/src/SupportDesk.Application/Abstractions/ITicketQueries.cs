@@ -16,4 +16,10 @@ public interface ITicketQueries
 
     /// <summary>A customer's tickets, newest first.</summary>
     Task<IReadOnlyList<TicketListItemDto>> GetForCustomerAsync(int customerId, CancellationToken ct);
+
+    /// <summary>
+    /// A ticket's escalation history, newest first, or null when the ticket does not exist (so
+    /// "no such ticket" and "never escalated" are not confused).
+    /// </summary>
+    Task<IReadOnlyList<TicketEscalationDto>?> GetEscalationsAsync(int ticketId, CancellationToken ct);
 }
