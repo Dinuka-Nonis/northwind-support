@@ -1,4 +1,5 @@
 using SupportDesk.Application.Contracts.Agents;
+using SupportDesk.Application.Contracts.Auth;
 using SupportDesk.Domain.Triage;
 
 namespace SupportDesk.Application.Abstractions;
@@ -16,4 +17,10 @@ public interface IAgentQueries
     /// with one query for all agents, so assigning a ticket never costs a query per agent.
     /// </summary>
     Task<IReadOnlyList<AgentCandidate>> GetAssignmentCandidatesAsync(CancellationToken ct);
+
+    /// <summary>
+    /// The agent with this email, with the password hash the sign-in check needs, or null when
+    /// there is none. Reads only the columns the check uses.
+    /// </summary>
+    Task<AgentLoginRecord?> FindForLoginAsync(string email, CancellationToken ct);
 }
