@@ -7,5 +7,9 @@ namespace SupportDesk.Domain.Repositories;
 /// </summary>
 public interface ICustomerRepository
 {
-    Task<bool> ExistsAsync(int id, CancellationToken ct);
+    /// <summary>
+    /// Loads a customer to read from (it is not tracked), or null when it does not exist. The
+    /// triage rules need the tier, so an existence check alone is no longer enough.
+    /// </summary>
+    Task<Customer?> GetByIdAsync(int id, CancellationToken ct);
 }
