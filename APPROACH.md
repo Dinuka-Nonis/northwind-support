@@ -1,144 +1,156 @@
-# Approach
+# Architectural & Engineering Approach
 
-How each assignment task was tackled. **Tasks 1, 2 and 3** are finished.
-
----
-
-## Task 1: Defect fix and server-side filtering
-
-### 1.1 DEFECT-117
-
-1. **Reproduce** — Changed Status to *In progress* with DevTools open; no network call until search or page changed. Matched the report.
-2. **Locate** — `useTicketList` owned both `filters` and the fetch effect. The effect dependency array listed only `search`, `page`, and `pageSize`.
-3. **Root cause** — Non-search filter updates never triggered `load`, so the UI showed stale data until something in the dependency list changed.
-4. **Fix** — Split “display search” from “committed filters”: debounce writes search into `filters`; use `useAsyncData` so any committed `filters` change reloads. Avoid remount/`key` tricks.
-5. **Regression tests** — Vitest + fake timers: status/priority/etc. trigger an immediate second `getTickets` call; search debounces; status survives search clear (third symptom in the report).
-
-### 1.2 Server-side filtering
-
-1. **Read the contract** — `TicketQuery` already bound every query param; `TicketQueries.GetPagedAsync` counted and paged the full set.
-2. **Order of operations** — Filter first, `CountAsync` on the filtered query, then sort/skip/take. Wrong order breaks `totalCount` and the pager (FL-5).
-3. **Implementation** — Private `ApplyFilters`: one optional `Where` per bound filter, ANDed. Search on title, reference, customer name; trim via `Normalized()`.
-4. **Tests** — Seed SQLite with known tickets; test exact priority, AND combination, customer-name search, unassigned-only, and paging over a filtered set. Command log confirms SQL is generated (not client-side evaluation).
-5. **Task 2 hook** — Left filters as isolated `if` blocks so `slaStatus` is a property + one block, not a rewrite.
+This document outlines the thought process, architectural decisions, and problem-solving methodology applied throughout the Northwind Support Desk assessment. Each decision records what was chosen, what was rejected, and why. See [`README.md`](README.md) for setup, endpoints, and the full decision table.
 
 ---
 
-## Task 2: Ticket escalation and assignment
+## Guiding Principles
 
-### 2.1 How I read the task
-
-The rules are short: a priority, a due date, an owner, one level up on escalation. The task says the
-hard part is where they go, so I started from that. Three things shaped everything else:
-
-1. **Create and escalate need the same decisions.** Both work out a due date and an owner. If that
-   lived in the handlers, I would have two copies that could drift.
-2. **Time is an input.** Every rule that depends on "now" takes it as a value, so the tests can use a
-   fixed clock and check exact boundaries.
-3. **The numbers belong to configuration, and the category behaviour to the category flags.** Nothing
-   in code names a category or hides a default.
-
-### 2.2 Where I put things, and why
-
-- **Domain (`Triage/`)** holds the rules as plain, pure units: `PriorityRule`, `SlaPolicy`,
-  `AgentSelector`. They take values and return a decision plus a reason, so each one is tested with
-  no database and no mocks.
-- **Domain (`Ticket`)** owns the escalation guards and the history row. A ticket that cannot be
-  escalated is refused by the ticket itself, whoever calls it.
-- **Application (`TicketTriager`)** only assembles those rules for a use case. It holds no rule of its
-  own, which is what lets create and escalate share it without sharing a handler.
-- **Handlers** load, call the rules, save and map. Nothing else.
-- **Infrastructure** keeps reads in one place. The SLA filter is one more `if` in `ApplyFilters`.
-- **Web** keeps the rules (limits, "can this be escalated, and if not why") in one small file with no
-  React in it, so they are tested directly.
-
-### 2.3 The decisions I thought hardest about
-
-- **Derived SLA status, not stored.** A stored status is wrong as soon as time passes. Deriving it
-  costs a bit of date arithmetic in the filter, but it can never be stale.
-- **Keeping the current agent on escalation without a capacity check.** The ticket already counts
-  towards that agent's load. Checking capacity would take a ticket away from someone because it
-  became more important, which is the opposite of what a lead would want.
-- **The at-risk window starts at creation, even after an escalation.** The alternative is a stored
-  window start. I kept the model smaller and wrote the trade-off down instead.
-- **A refusal names its real reason.** A resolved Critical ticket says "resolved", not "Critical",
-  and the screen and the API use the same order.
-- **Reasons come with every decision.** Priority, window and owner each return a sentence, so nobody
-  has to guess why a ticket went where it did.
-
-### 2.4 How I checked it
-
-- Unit tests for each rule at its boundaries, using the fixed clock and the ticket builder.
-- The SQL filter runs against in-memory SQLite for the statuses SQLite can express, with a test that
-  compares the filter with `SlaEvaluator` so the two cannot drift. At risk and Within SLA need
-  `DATEDIFF`, so I checked those by hand against SQL Server and looked at the generated SQL.
-- Web tests for the behaviour that matters: a short reason never reaches the API, a 409 is shown and
-  the ticket is left alone, every SLA state looks different, and a new filter requests immediately.
-- Architecture tests that were already in the repo kept the layers honest.
+- **Dependencies point inward.** Domain depends on nothing; Application depends on Domain; Infrastructure implements the interfaces they declare; Presentation wires everything together and is the only layer that knows about HTTP and JWT. Architecture tests enforce this (Domain has no framework dependency, Application does not reference ASP.NET, the EF model must match the migrations).
+- **Rules are pure.** Priority, SLA window and owner selection take values, "now" and their configured numbers, and return a decision with a reason. They can be tested without a database.
+- **Derive, do not store.** SLA status and an agent's open-ticket count are computed every time, so they never go stale.
+- **One place for each cross-cutting rule.** Sign-in is one fallback policy, errors go through one middleware, a `401` is handled in one web client, and list filters live in one `ApplyFilters`.
+- **Reads and writes differ.** Reads go through query services that project to DTOs without tracking. Writes go through domain entities, and a use case saves once (the ticket and its history row together).
+- **Settings are configuration.** The Docker image holds code, never settings or secrets.
 
 ---
 
-## Task 3: Login and authentication
+## Task 1: Defect Fix & Server-Side Filtering
 
-### 3.1 How I read the task
+### 1.1 Defect Analysis & Resolution (DEFECT-117)
+- **Thought Process:**
+  The ticket list did not re-query the backend when a filter dropdown (Status, Priority, Category, Agent) changed. The effect that triggered the fetch depended only on `search`, `page` and `pageSize`. Changing a filter updated state but never ran `load`, so the UI showed stale data.
+- **Decision:**
+  Fix the root cause rather than work around it. Search is debounced (300 ms) into the committed `filters`, and `useAsyncData` reloads whenever the committed `filters` change. Dropdowns commit immediately, so only typing is delayed. Remounting the component or changing a `key` was rejected because it hides the bug instead of fixing the dependency.
+- **Verification:**
+  - Automated: `useTicketList.test.ts` (fake timers) covers filter-change requests, the search debounce, and a DEFECT-117 regression.
+  - Manual: with DevTools open, changing Status to *In progress* immediately sends `GET /api/tickets?...status=InProgress`.
 
-The app was open to anyone, and the only thing that needs a real identity is the escalation history,
-which until now took a typed name. So I treated three things as the core and kept everything else
-small:
-
-1. **A password must be hard to steal and a failure must say nothing.** The hash is slow and salted,
-   and every way of failing returns the same answer.
-2. **The server decides who is allowed in, once.** If each controller has to remember to check, one
-   will eventually forget.
-3. **The signed-in agent is a fact from the token, never from the request.** Anything the client can
-   type, the client can fake.
-
-### 3.2 Where I put things, and why
-
-- **Domain** only gains the `PasswordHash` on `Agent`, with one method that rejects a blank hash.
-- **Application** owns the login rules (`LoginCommandHandler`) and two small seams: `IPasswordHasher`
-  and `ITokenIssuer`. They are real seams: the hash algorithm and the token format can change without
-  touching the rules, and the rules are tested with the real hasher and a mocked issuer.
-- **Infrastructure** has the BCrypt hasher and the narrow, read-only lookup for sign-in.
-- **Presentation** is the only layer that knows about JWT: the options, the issuer, the bearer setup,
-  the fallback policy and the claim readers. Application never sees a token library.
-- **Web** keeps the session in one small module with no React in it, the API client reads it, and a
-  provider turns it into React state. A `401` is handled in one place, the client, not in each screen.
-
-### 3.3 The decisions I thought hardest about
-
-- **A column, not a Users table.** Each login is one agent and there are no roles. A second table
-  would only add a join. It would be the right move if other kinds of user appeared.
-- **A fallback policy, not `[Authorize]` everywhere.** Closed by default means a new controller cannot
-  be left open by mistake. The cost is that Swagger and login need to be called out, and they are.
-- **The token lives in memory.** A saved token can be read by any script on the page. Keeping it in
-  memory means a refresh signs you out, which I accepted and wrote down. The better answer for
-  production is an `httpOnly` cookie or a backend-for-frontend.
-- **60 minutes and no refresh token.** Long enough for a working session, short enough to limit a
-  leaked token. Refresh tokens are out of scope.
-- **One generic failure, with the real reason in the log.** The caller learns nothing about which
-  emails exist, and the team can still see what happened. An unknown email is not logged, because
-  people paste passwords into that box.
-- **A late `401` must not sign out a fresh session.** The client only clears the session when the token
-  the failed call carried is still the current one.
-- **`escalatedBy` was removed from the request, not just ignored.** The type no longer has the field,
-  so it cannot be misused later. The price is a known limit: a name over 100 characters would fail.
-
-### 3.4 How I checked it
-
-- Unit tests for the rules: the hasher, each way login can fail, and the token's claims and exact
-  expiry using the fixed clock.
-- An enforcement test on a small host that calls the real `AddJwtAuthentication`. It has an endpoint
-  with no `[Authorize]`, so a `401` there can only come from the fallback policy. No token, an expired
-  token, a tampered one and one signed with another key are all refused.
-- Web tests for the behaviour that matters: the token is attached, a `401` clears the session, a
-  signed-out visit goes to login and comes back, and invalid input never reaches the API.
-- By hand against a running API: a ticket call with and without the token, the same `401` for a wrong
-  email and a wrong password, inactive Yuki refused, only hashes in the table, and the redirect to login
-  and back in the browser.
+### 1.2 Server-Side Filtering Architecture
+- **Thought Process:**
+  Filtering has to happen in SQL Server before the count and paging. Filtering in C# afterwards would return a wrong `totalCount` and a broken pager.
+- **Decision:**
+  `TicketQueries.ApplyFilters` ANDs one optional `Where` per bound filter, then runs `CountAsync` on the filtered query, then sorts and pages. That order keeps `totalCount` and the pager correct.
+- **Verification:**
+  Tests run against in-memory SQLite with an EF command interceptor, so the logged SQL proves the filter runs in the database and not on the client. `TicketQueriesFilterTests` covers priority, AND combination, customer-name search, and paging over a filtered set.
+- **Extensibility:**
+  Task 2's `slaStatus` was added as one property and one `if` block in `ApplyFilters`.
 
 ---
 
-## Task 4: Dockerise the API
+## Task 2: Ticket Escalation, Triage & Assignment
 
-Not started.
+### 2.1 Automated Triage on Create
+- **Thought Process:**
+  Create and escalate both need priority, due date and owner decisions. Putting the rules in handlers would give two copies that could drift apart and could not be tested without a database. A rules engine or MediatR was rejected as more machinery than the problem needs.
+- **Decision:**
+  Small pure units in the domain, assembled by `TicketTriager` so create and escalate share one copy:
+  - `PriorityRule`: uses the requested priority, Medium if none is given, and always Critical when the category's flag says so.
+  - `SlaPolicy`: picks the window by priority and customer tier, and computes the due date.
+  - `AgentSelector`: considers active agents, a specialist when the category needs one, agents strictly below their limit, then the fewest open tickets, with the lowest id winning a tie.
+- **SLA Configuration:**
+  Base windows are Critical 4 h, High 8 h, Medium 24 h, Low 72 h. The Premium multiplier is 0.5 with a 1 h floor. "At risk" starts at 25% of the window remaining. These live in the `Sla` configuration section. Invalid or missing values stop startup, because default numbers in code would let a wrong config go unnoticed.
+- **Edge Case:**
+  When nobody is eligible, the ticket is created unassigned. This is a normal result, not an error. `POST /api/tickets` returns `201` with a `triage` object listing the reason for each decision.
+
+### 2.2 Escalation & SLA Status Derivation
+- **Escalation Rules:**
+  - `POST /api/tickets/{id}/escalate` raises priority one level.
+  - The due date is recomputed from the moment of escalation.
+  - The current agent is kept if still active and qualified, otherwise one is reselected. No capacity check is applied, because the ticket already counts towards their load and a check would remove it just because it became more important.
+  - The ticket and a `TicketEscalations` row are saved together. The row is immutable and records before/after priority, due date and agent, plus reason, actor and time.
+  - The reason must be 5 to 500 characters.
+  - Critical, Resolved and Closed tickets return `409` with the real reason, and nothing is saved.
+  - `GET /api/tickets/{id}/escalations` returns the history, newest first, served by the index `IX_TicketEscalations_TicketId_EscalatedAtUtc`.
+- **Dynamic SLA Status (derived, never stored):**
+  `SlaEvaluator` returns Within SLA, At risk, Breached, Met or No SLA from the dates. A stored status goes stale as time passes and needs a job to refresh it, so it was rejected. Boundaries: exactly 25% left and due exactly now are both At risk, and resolved on the due date is Met.
+- **SQL Server Translation:**
+  The `slaStatus` filter must run in the database before count and paging, so it uses `EF.Functions.DateDiffSecond` with the same rule as `SlaEvaluator`. One "now" per request is shared by the filter and the row labels, so the filter and the badge never disagree.
+- **Spec Ambiguities Resolved:**
+  - "Open" means not Resolved or Closed.
+  - Priority defaults to Medium, and forced Critical comes from the category flag.
+  - A tie in agent selection goes to the lowest id.
+  - "At the limit" means full.
+  - The at-risk window starts at creation, even after an escalation.
+  - The 1 h floor applies to Premium only, and Premium is never longer than Standard (this cap was my addition).
+  - A refusal names its real reason.
+
+### 2.3 Frontend User Experience
+- **SLA Indicator (`SlaIndicator`):**
+  Every state has its own words and symbol (● ▲ ✕ ✓ –), so meaning does not depend on colour alone.
+- **Escalation Panel & History:**
+  Shows the escalation history, handles the `409` path with the real reason, and shows the triage result after create. The ticket list also gains an SLA status filter.
+
+---
+
+## Task 3: Agent Authentication & Route Protection
+
+### 3.1 Credential Storage & Hashing
+- **Aggregate Boundary:**
+  A nullable `PasswordHash` column (`nvarchar(256)`, migration `AddAgentPasswordHash`) was added directly to `Agent`. Every login is one agent and there are no roles, so a separate `Users` table would only add a join. The column is nullable so the migration is safe for existing rows, and 256 leaves room if the algorithm changes.
+- **Hashing:**
+  BCrypt (enhanced mode, work factor 12) behind `IPasswordHasher`. It is maintained, deliberately slow and salted, and enhanced mode removes the 72-byte password limit. PBKDF2 and a home-made hash were rejected.
+- **Anti-Enumeration:**
+  `POST /api/auth/login` returns the identical `401` for a wrong email, a wrong password, an inactive agent, and an agent with no hash. The real reason goes to the log only, so nothing reveals which emails exist.
+
+### 3.2 Token Architecture & Centralized Authorization
+- **Token Design:**
+  HS256 JWT with `sub`, `name`, `email` and `jti`, valid for 60 minutes (`Jwt:LifetimeMinutes`). The API validates signature, issuer, audience and expiry with no clock skew. The key comes from `Jwt__Key`, must be at least 32 bytes, and a missing or short key stops the API at startup. No refresh token is issued, which keeps the API stateless and out of scope for this brief.
+- **Secure by Default:**
+  A fallback authorization policy requires an authenticated user for every endpoint that has no authorization of its own. Only `/api/auth/login` and `/health` are opened, each deliberately. `[Authorize]` on every controller was rejected because a forgotten attribute would leave a new controller open. Swagger is middleware, so the policy never sees it.
+- **Actor Integrity:**
+  The escalate request body contains only `reason`. The actor's name is read from the token, so a caller cannot record an escalation under someone else's name.
+
+### 3.3 Frontend Authentication
+- **Token Storage:**
+  The token lives in a module variable in memory. `localStorage`, `sessionStorage` and cookies were rejected so that nothing is saved where a script can read it later. The trade-off is that a refresh means signing in again.
+- **HTTP Client:**
+  The web client attaches `Authorization: Bearer <token>` to requests. Any `401` that carried the current token clears the session and sends the user back to login.
+- **Protected Routing:**
+  A route guard protects the app, remembers the wanted page (inside the app only) and returns the user there after login. The header shows the agent's name and a Log out button.
+- **Verification:**
+  Tests cover the hasher, each way login can fail, token claims and exact expiry, and enforcement on a small host using the real `AddJwtAuthentication` (no token, expired, tampered and wrong-key tokens all return `401`). Web tests cover the token being attached, `401` clearing the session, and the guard redirect.
+
+---
+
+## Task 4: Dockerisation & Operational Hardening
+
+### 4.1 Multi-Stage Container Architecture
+- **Build vs. Runtime Separation:**
+  - Build stage: `mcr.microsoft.com/dotnet/sdk:10.0`
+  - Runtime stage: `mcr.microsoft.com/dotnet/aspnet:10.0`
+- **Build Cache Optimization:**
+  `global.json`, `Directory.Build.props`, `Directory.Packages.props` and the four project files are copied first and `dotnet restore` runs, then the source is copied and published. A code-only change reuses the restore layer.
+- **Runtime Image Choice:**
+  Debian `aspnet:10.0` was chosen over Alpine and chiseled. The brief checks `docker compose exec api whoami`, which needs a shell, and a chiseled image has none. Alpine adds musl and no ICU.
+
+### 4.2 Security & Configuration Hardening
+- **Least Privilege:** The container runs as the non-root `app` user on plain HTTP port 8080 (published as `5080:8080`).
+- **Nothing Baked In:** No secrets or settings are in the image. `appsettings.Development.json` is excluded from every publish. Reading the code before writing the Dockerfile showed that `Sla` existed only in the Development file, so it was moved to `appsettings.json` so the image still starts.
+- **Secrets in Compose:** `Jwt__Key=replace-me` in `.env.example` would crash the container, because the key is too short on purpose. It is commented out, and Compose supplies a fake, published default that must never leave a local machine.
+- **Environment:** Compose runs as `Development` by default, because the brief says to migrate and seed "as it does today in Development". A new `RUN_MIGRATIONS` switch was rejected. The cost is that Swagger is on in Compose.
+
+### 4.3 Production Readiness & Health Checks
+- **Health Endpoint:**
+  `GET /health` is anonymous, checks the database, and returns `200 Healthy` or `503 Unhealthy` with no data in the body.
+- **Orchestration:**
+  `docker compose up` starts SQL Server first and the API once the database is healthy, then gives a migrated, seeded API.
+- **Production Migration Strategy:**
+  In a real deployment, set `ASPNETCORE_ENVIRONMENT=Production` (migrate, seed and Swagger off) and run migrations as a separate step with an EF Core migration bundle. The app migrating itself was rejected because:
+  - Replicas would race to migrate the same database.
+  - The app's login should not have schema rights.
+  - A failed migration should fail the deploy, not crash-loop the app.
+  - A script can be reviewed and rolled back, which startup code cannot.
+
+  The bundle is documented, not built or wired into Compose.
+- **Verification:**
+  Task 4 has no automated test, as the brief says. Five checks were run by hand: clean run (`/health` returns `200`, login works, 40 seeded tickets with a token and `401` without), layer caching (restore step `CACHED`), `whoami` prints `app`, no `appsettings.Development.json` in `/app`, and the web app signing in against the container API.
+
+---
+
+## Known Trade-offs
+
+- **SLA:** At risk can appear early after an escalation because the window starts at creation. The At risk and Within SLA filters need SQL Server (SQLite has no `DATEDIFF`), so they were verified by hand against SQL Server.
+- **Assignment:** Two tickets created at the same moment can both take an agent's last slot.
+- **Auth:** No lockout, rate limiting, refresh tokens, revocation or password reset. A deactivated agent keeps access for up to 60 minutes. Production would use an `httpOnly` cookie instead of an in-memory token.
+- **Docker:** The container runs plain HTTP as Development with a fake published JWT key. Production migrations are documented, not built.

@@ -1,0 +1,21 @@
+# The build context is the repository root (see apps/api/Dockerfile). Keep out of it everything
+# the API image does not need: build output from the host, secrets, and the other apps.
+
+# Build output from the host. A restored `obj/` from a Windows machine would also break the
+# restore inside the image.
+**/bin/
+**/obj/
+
+# Dependencies and the web app (the image is the API only).
+**/node_modules/
+apps/web/
+
+# Source control and local environment files. .env holds local settings and must never reach an image.
+.git/
+**/.env
+**/.env.*
+
+# Not needed to build or run the API.
+apps/api/tests/
+.github/
+.vscode/

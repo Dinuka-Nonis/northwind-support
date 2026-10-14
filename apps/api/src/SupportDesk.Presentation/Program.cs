@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using SupportDesk.Application;
 using SupportDesk.Domain.Triage;
 using SupportDesk.Infrastructure;
+using SupportDesk.Infrastructure.Data;
 using SupportDesk.Presentation.Extensions;
 using SupportDesk.Presentation.Filters;
 using SupportDesk.Presentation.Middleware;
@@ -41,6 +42,10 @@ builder.Services.AddSingleton(slaPolicy);
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 
+// GET /health answers whether the API can reach its database: the check asks EF Core whether a
+// connection can be opened. It reports "Healthy" (200) or "Unhealthy" (503) and nothing else.
+builder.Services.AddHealthChecks().AddDbContextCheck<SupportDbContext>("database");
+
 var app = builder.Build();
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
@@ -62,5 +67,9 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+// A load balancer or an orchestrator has no token, so this is the second deliberate exception to
+// the fallback policy (after login). The answer carries no data, only the status.
+app.MapHealthChecks("/health").AllowAnonymous();
 
 app.Run();
