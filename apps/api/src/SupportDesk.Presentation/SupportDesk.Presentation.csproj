@@ -6,6 +6,15 @@
     <ProjectReference Include="../SupportDesk.Infrastructure/SupportDesk.Infrastructure.csproj" />
   </ItemGroup>
 
+  <!--
+    appsettings.Development.json holds a fake signing key and a localhost connection string. It is
+    for running from source only, so it is never copied to the publish output (and so never into
+    the Docker image): a published app gets its real settings from environment variables.
+  -->
+  <ItemGroup>
+    <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
     <PackageReference Include="Swashbuckle.AspNetCore" />
