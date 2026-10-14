@@ -64,6 +64,17 @@ export interface TicketListItem {
   slaStatus: SlaStatus;
 }
 
+/** What the triage rules decided for a new ticket, and why. Only sent when a ticket is created. */
+export interface TriageResult {
+  priority: TicketPriority;
+  priorityReason: string;
+  dueAtUtc: string;
+  slaWindowHours: number;
+  slaReason: string;
+  assignedAgent: AgentSummary | null;
+  assignmentReason: string;
+}
+
 export interface TicketDetail {
   id: number;
   reference: string;
@@ -79,6 +90,8 @@ export interface TicketDetail {
   dueAtUtc: string | null;
   resolvedAtUtc: string | null;
   slaStatus: SlaStatus;
+  /** Present only on the response to creating a ticket. */
+  triage?: TriageResult;
 }
 
 /** One row of a ticket's escalation history, as the API returns it (newest first). */

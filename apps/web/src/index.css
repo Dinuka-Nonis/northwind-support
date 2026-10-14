@@ -516,3 +516,12 @@ textarea[aria-invalid='true'] {
   font-size: 0.8rem;
   color: var(--colour-muted);
 }
+
+.triage {
+  margin: 12px 0 var(--gap);
+}
+
+.triage h2 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
