@@ -1,5 +1,8 @@
-# SQL Server for local development only. The password below is a throwaway local
-# placeholder - never commit a real credential.
+# Local development stack: SQL Server, and the API in a container. The passwords and the signing
+# key below are throwaway local placeholders - never commit a real credential.
+#
+#   docker compose up --build            SQL Server + API (http://localhost:5080)
+#   docker compose up -d sqlserver       only the database, to run the API from source (npm run api)
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -22,6 +25,30 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: supportdesk-api
+    container_name: supportdesk-api
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    ports:
+      - "5080:8080"
+    # Nothing is baked into the image: every setting arrives here, as an environment variable.
+    # The defaults only exist so a clean checkout works without a .env file.
+    environment:
+      # Development gives the container Swagger, the automatic migration and the demo seed data
+      # (DK-6). Set it to Production to turn all three off.
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
+      # Reaches SQL Server by its service name, not localhost (inside the container, localhost is
+      # the container itself).
+      ConnectionStrings__Default: "Server=sqlserver,1433;Database=SupportDesk;User Id=sa;Password=${MSSQL_SA_PASSWORD:-Local_Dev_Password1};TrustServerCertificate=True;Encrypt=False"
+      # The same clearly fake, published key as appsettings.Development.json (which is not in the
+      # image). Set Jwt__Key in .env, or in the environment, to use a real one.
+      Jwt__Key: "${Jwt__Key:-LOCAL-DEV-ONLY-jwt-signing-key-not-a-secret-0123456789}"
 
 volumes:
   supportdesk-sql:
