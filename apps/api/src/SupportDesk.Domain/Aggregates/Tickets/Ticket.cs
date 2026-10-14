@@ -49,8 +49,9 @@ public sealed class Ticket : AggregateRoot
     public bool IsOpen => Status is not (TicketStatus.Resolved or TicketStatus.Closed);
 
     /// <summary>
-    /// Raises a new ticket for a customer. It starts as <see cref="TicketStatus.New"/>, with no
-    /// owner and no due date.
+    /// Raises a new ticket for a customer. It starts as <see cref="TicketStatus.New"/>. The due
+    /// date and owner are decided by the caller (the triage rules) and passed in; without them
+    /// the ticket has no owner and no due date.
     /// </summary>
     public static Ticket Raise(
         string reference,
@@ -59,7 +60,9 @@ public sealed class Ticket : AggregateRoot
         int customerId,
         int categoryId,
         TicketPriority priority,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        DateTime? dueAtUtc = null,
+        int? assignedAgentId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reference);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
@@ -72,10 +75,12 @@ public sealed class Ticket : AggregateRoot
             Description = description.Trim(),
             CustomerId = customerId,
             CategoryId = categoryId,
+            AssignedAgentId = assignedAgentId,
             Priority = priority,
             Status = TicketStatus.New,
             CreatedAtUtc = nowUtc,
-            UpdatedAtUtc = nowUtc
+            UpdatedAtUtc = nowUtc,
+            DueAtUtc = dueAtUtc
         };
     }
 
@@ -110,5 +115,63 @@ public sealed class Ticket : AggregateRoot
     {
         AssignedAgentId = agentId;
         UpdatedAtUtc = nowUtc;
+    }
+
+    /// <summary>
+    /// The priority this ticket would have after one escalation. Callers use it to work out the
+    /// new due date and owner before calling <see cref="Escalate"/>.
+    /// </summary>
+    /// <exception cref="BusinessRuleViolationException">
+    /// The ticket is Resolved or Closed, or is already Critical. The message says which.
+    /// </exception>
+    public TicketPriority PriorityAfterEscalation()
+    {
+        // Checked first so the message names the real reason: a Resolved Critical ticket is
+        // rejected for being resolved.
+        if (!IsOpen)
+        {
+            throw new BusinessRuleViolationException(
+                $"Ticket {Reference} is {Status} and cannot be escalated.");
+        }
+
+        return Priority switch
+        {
+            TicketPriority.Low => TicketPriority.Medium,
+            TicketPriority.Medium => TicketPriority.High,
+            TicketPriority.High => TicketPriority.Critical,
+            _ => throw new BusinessRuleViolationException(
+                $"Ticket {Reference} is already Critical and cannot be escalated further.")
+        };
+    }
+
+    /// <summary>
+    /// Raises the priority one level and applies the due date and owner that the caller worked out
+    /// for it. Returns the history row, which the caller must save with the ticket.
+    /// </summary>
+    /// <param name="reason">Why, 5 to 500 characters after trimming.</param>
+    /// <param name="escalatedBy">Who, 1 to 100 characters after trimming.</param>
+    /// <param name="newDueAtUtc">The due date counted from <paramref name="nowUtc"/>.</param>
+    /// <param name="newAgentId">The owner after escalation, or null when nobody is eligible.</param>
+    /// <exception cref="BusinessRuleViolationException">The ticket cannot be escalated.</exception>
+    /// <exception cref="ArgumentException">The reason or the actor is missing or the wrong length.</exception>
+    public TicketEscalation Escalate(
+        string reason,
+        string escalatedBy,
+        DateTime newDueAtUtc,
+        int? newAgentId,
+        DateTime nowUtc)
+    {
+        var newPriority = PriorityAfterEscalation();
+
+        // The history row is built first, so invalid input leaves the ticket untouched.
+        var escalation = new TicketEscalation(
+            Id, Priority, newPriority, DueAtUtc, newDueAtUtc, AssignedAgentId, newAgentId, reason, escalatedBy, nowUtc);
+
+        Priority = newPriority;
+        DueAtUtc = newDueAtUtc;
+        AssignedAgentId = newAgentId;
+        UpdatedAtUtc = nowUtc;
+
+        return escalation;
     }
 }
