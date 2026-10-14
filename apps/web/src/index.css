@@ -303,6 +303,10 @@ textarea[aria-invalid='true'] {
   color: var(--colour-muted);
 }
 
+.sla-indicator__glyph {
+  margin-right: 4px;
+}
+
 .summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
