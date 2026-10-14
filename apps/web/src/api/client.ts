@@ -1,3 +1,4 @@
+import { getSession } from '../auth/session';
 import type { ProblemDetails } from '../types/api';
 
 /**
@@ -25,20 +26,52 @@ export class ApiError extends Error {
   }
 }
 
+export interface RequestOptions extends RequestInit {
+  /**
+   * Send the request without the session's token, and do not treat a 401 as an expired
+   * session. For calls made while signed out, which is only the login itself: a 401 there means
+   * wrong credentials, and the login page shows it.
+   */
+  anonymous?: boolean;
+}
+
+type UnauthorizedHandler = () => void;
+
+let onUnauthorized: UnauthorizedHandler | undefined;
+
 /**
- * The single place that talks to the API. Returns parsed JSON, or throws an
- * {@link ApiError} that callers can show to the user.
+ * Registers what happens when the API rejects the session's own token (it expired, or was
+ * never valid). The auth provider uses it to clear the session, which sends the user to the
+ * login page. Pass undefined to remove it.
  */
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | undefined): void {
+  onUnauthorized = handler;
+}
+
+/**
+ * The single place that talks to the API. Attaches the session's token to every call, returns
+ * parsed JSON, or throws an {@link ApiError} that callers can show to the user.
+ */
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { anonymous = false, headers, ...init } = options;
+  const token = anonymous ? undefined : getSession()?.token;
+
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(headers ?? {}),
     },
   });
 
   if (!response.ok) {
+    // Only when the token this call carried is still the session's token. A slow reply to a
+    // call made before a fresh sign-in must not sign the new session out.
+    if (response.status === 401 && token && getSession()?.token === token) {
+      onUnauthorized?.();
+    }
+
     const problem = await readProblem(response);
 
     throw new ApiError(
