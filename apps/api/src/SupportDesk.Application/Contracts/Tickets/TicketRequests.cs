@@ -17,9 +17,8 @@ public sealed record UpdateTicketStatusRequest(TicketStatus Status);
 public sealed record AssignTicketRequest(int? AgentId);
 
 /// <summary>
-/// Body of POST /api/tickets/{id}/escalate. <paramref name="EscalatedBy"/> is free text until
-/// sign-in exists (Task 3), when it will come from the token instead.
+/// Body of POST /api/tickets/{id}/escalate. It carries no "who": the agent who escalates is the
+/// one the sign-in token names, so a caller cannot record the escalation under someone else.
 /// </summary>
 /// <param name="Reason">Why the ticket is being escalated, 5 to 500 characters.</param>
-/// <param name="EscalatedBy">Who is escalating it, 1 to 100 characters.</param>
-public sealed record EscalateTicketRequest(string Reason, string EscalatedBy);
+public sealed record EscalateTicketRequest(string Reason);

@@ -7,7 +7,7 @@ namespace SupportDesk.Application.Features.Tickets.Commands.EscalateTicket;
 /// <summary>
 /// The same limits the history table and the escalation row enforce, measured after trimming
 /// (so a reason of spaces is empty, and padding never counts towards the length). The web
-/// form checks the same numbers.
+/// form checks the same numbers. Only the reason is checked: who escalated comes from the token.
 /// </summary>
 public sealed class EscalateTicketRequestValidator : AbstractValidator<EscalateTicketRequest>
 {
@@ -18,12 +18,6 @@ public sealed class EscalateTicketRequestValidator : AbstractValidator<EscalateT
             .WithMessage($"A reason of at least {TicketEscalation.ReasonMinLength} characters is required.")
             .Must(reason => TrimmedLength(reason) <= TicketEscalation.ReasonMaxLength)
             .WithMessage($"The reason must be at most {TicketEscalation.ReasonMaxLength} characters.");
-
-        RuleFor(x => x.EscalatedBy)
-            .Must(escalatedBy => TrimmedLength(escalatedBy) >= 1)
-            .WithMessage("Who is escalating the ticket is required.")
-            .Must(escalatedBy => TrimmedLength(escalatedBy) <= TicketEscalation.EscalatedByMaxLength)
-            .WithMessage($"Who is escalating the ticket must be at most {TicketEscalation.EscalatedByMaxLength} characters.");
     }
 
     private static int TrimmedLength(string? value) => value?.Trim().Length ?? 0;

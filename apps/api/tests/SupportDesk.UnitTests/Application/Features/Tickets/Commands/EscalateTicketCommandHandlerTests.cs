@@ -13,8 +13,11 @@ public class EscalateTicketCommandHandlerTests
     // Tickets built by TicketBuilder are in category 1, so specialists list 1.
     private const int TicketCategory = 1;
 
-    private static EscalateTicketRequest Request() =>
-        new("  Customer is escalating again  ", "  Priya Nair  ");
+    // The signed-in agent's name, as the controller reads it from the token. Padded on purpose,
+    // to show that the history row stores it trimmed.
+    private const string Actor = "  Priya Nair  ";
+
+    private static EscalateTicketRequest Request() => new("  Customer is escalating again  ");
 
     private static AgentCandidate Candidate(
         int id,
@@ -35,7 +38,7 @@ public class EscalateTicketCommandHandlerTests
 
         context.Clock.Advance(TimeSpan.FromHours(3));
 
-        var result = await context.EscalateTicket.HandleAsync(ticket.Id, Request(), CancellationToken.None);
+        var result = await context.EscalateTicket.HandleAsync(ticket.Id, Request(), Actor, CancellationToken.None);
 
         Assert.Equal(TicketPriority.High, ticket.Priority);
         Assert.Equal(context.Clock.UtcNow, ticket.UpdatedAtUtc);
@@ -61,6 +64,20 @@ public class EscalateTicketCommandHandlerTests
         Assert.False(string.IsNullOrWhiteSpace(result.SlaReason));
     }
 
+    [Fact]
+    public async Task HandleAsync_RecordsTheEscalationUnderTheNameItWasGiven()
+    {
+        var context = new TicketCommandTestContext();
+        var ticket = context.ExistingTicket(new TicketBuilder().WithPriority(TicketPriority.Medium).Build());
+
+        // The name is a parameter, not part of the request, so whoever is signed in is who is recorded.
+        await context.EscalateTicket.HandleAsync(
+            ticket.Id, Request(), "Sara Lindqvist", CancellationToken.None);
+
+        Assert.NotNull(context.AddedEscalation);
+        Assert.Equal("Sara Lindqvist", context.AddedEscalation.EscalatedBy);
+    }
+
     [Theory]
     [InlineData(CustomerTier.Standard, 8)]
     [InlineData(CustomerTier.Premium, 4)]
@@ -73,7 +90,7 @@ public class EscalateTicketCommandHandlerTests
 
         context.Clock.Advance(TimeSpan.FromHours(10));
 
-        await context.EscalateTicket.HandleAsync(ticket.Id, Request(), CancellationToken.None);
+        await context.EscalateTicket.HandleAsync(ticket.Id, Request(), Actor, CancellationToken.None);
 
         // High is 8 h (4 h for Premium), counted from the moment of escalation.
         Assert.Equal(context.Clock.UtcNow.AddHours(expectedHours), ticket.DueAtUtc);
@@ -89,7 +106,7 @@ public class EscalateTicketCommandHandlerTests
         // agent 2's load, so escalating it must not take it away from them.
         context.WithCandidates(Candidate(1, open: 0), Candidate(2, open: 5, max: 5));
 
-        var result = await context.EscalateTicket.HandleAsync(ticket.Id, Request(), CancellationToken.None);
+        var result = await context.EscalateTicket.HandleAsync(ticket.Id, Request(), Actor, CancellationToken.None);
 
         Assert.Equal(2, ticket.AssignedAgentId);
         Assert.NotNull(context.AddedEscalation);
@@ -108,7 +125,7 @@ public class EscalateTicketCommandHandlerTests
             Candidate(3, open: 2),
             Candidate(4, open: 3));
 
-        var result = await context.EscalateTicket.HandleAsync(ticket.Id, Request(), CancellationToken.None);
+        var result = await context.EscalateTicket.HandleAsync(ticket.Id, Request(), Actor, CancellationToken.None);
 
         Assert.Equal(3, ticket.AssignedAgentId);
         Assert.NotNull(context.AddedEscalation);
@@ -127,7 +144,7 @@ public class EscalateTicketCommandHandlerTests
             Candidate(2, open: 0),
             Candidate(3, open: 4, categories: [TicketCategory]));
 
-        await context.EscalateTicket.HandleAsync(ticket.Id, Request(), CancellationToken.None);
+        await context.EscalateTicket.HandleAsync(ticket.Id, Request(), Actor, CancellationToken.None);
 
         Assert.Equal(3, ticket.AssignedAgentId);
     }
@@ -139,7 +156,7 @@ public class EscalateTicketCommandHandlerTests
         var ticket = context.ExistingTicket(new TicketBuilder().WithPriority(TicketPriority.Low).Build());
         context.WithCandidates(Candidate(5, open: 0));
 
-        await context.EscalateTicket.HandleAsync(ticket.Id, Request(), CancellationToken.None);
+        await context.EscalateTicket.HandleAsync(ticket.Id, Request(), Actor, CancellationToken.None);
 
         Assert.Equal(5, ticket.AssignedAgentId);
         Assert.NotNull(context.AddedEscalation);
@@ -154,7 +171,7 @@ public class EscalateTicketCommandHandlerTests
         var ticket = context.ExistingTicket(new TicketBuilder().WithPriority(TicketPriority.Medium).AssignedTo(2).Build());
         context.WithCandidates(Candidate(2, open: 1, active: false), Candidate(3, open: 5, max: 5));
 
-        var result = await context.EscalateTicket.HandleAsync(ticket.Id, Request(), CancellationToken.None);
+        var result = await context.EscalateTicket.HandleAsync(ticket.Id, Request(), Actor, CancellationToken.None);
 
         Assert.Equal(TicketPriority.High, ticket.Priority);
         Assert.Null(ticket.AssignedAgentId);
@@ -174,7 +191,7 @@ public class EscalateTicketCommandHandlerTests
             .ReturnsAsync((Ticket?)null);
 
         var exception = await Assert.ThrowsAsync<NotFoundException>(
-            () => context.EscalateTicket.HandleAsync(99, Request(), CancellationToken.None));
+            () => context.EscalateTicket.HandleAsync(99, Request(), Actor, CancellationToken.None));
 
         Assert.Contains("Ticket", exception.Message);
         context.VerifySaved(Times.Never());
@@ -195,7 +212,7 @@ public class EscalateTicketCommandHandlerTests
         var updatedBefore = ticket.UpdatedAtUtc;
 
         var exception = await Assert.ThrowsAsync<BusinessRuleViolationException>(
-            () => context.EscalateTicket.HandleAsync(ticket.Id, Request(), CancellationToken.None));
+            () => context.EscalateTicket.HandleAsync(ticket.Id, Request(), Actor, CancellationToken.None));
 
         Assert.Contains(expectedInMessage, exception.Message);
         Assert.Equal(priority, ticket.Priority);

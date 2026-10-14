@@ -7,8 +7,7 @@ public class EscalateTicketRequestValidatorTests
 {
     private readonly EscalateTicketRequestValidator _validator = new();
 
-    private static EscalateTicketRequest Request(string? reason = "A good enough reason", string? escalatedBy = "Priya Nair") =>
-        new(reason!, escalatedBy!);
+    private static EscalateTicketRequest Request(string? reason = "A good enough reason") => new(reason!);
 
     private bool IsValid(EscalateTicketRequest request) => _validator.Validate(request).IsValid;
 
@@ -47,30 +46,12 @@ public class EscalateTicketRequestValidatorTests
         Assert.True(IsValid(Request(reason: "  " + new string('r', 500) + "  ")));
     }
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void AMissingActor_IsRejected(string? escalatedBy)
-    {
-        var request = Request(escalatedBy: escalatedBy);
-
-        Assert.False(IsValid(request));
-        Assert.Contains("EscalatedBy", FailedFields(request));
-    }
-
-    [Theory]
-    [InlineData(1, true)]
-    [InlineData(100, true)]
-    [InlineData(101, false)]
-    public void TheActor_MustBeOneToOneHundredCharacters(int length, bool expected) =>
-        Assert.Equal(expected, IsValid(Request(escalatedBy: new string('a', length))));
-
     [Fact]
-    public void BothFieldsFailing_ReportsBoth()
+    public void ATooShortReason_ReportsOnlyTheReason()
     {
-        var failed = FailedFields(Request(reason: "no", escalatedBy: ""));
+        // Who escalated is not part of the request any more, so the reason is the only field there is to fail.
+        var failed = FailedFields(Request(reason: "no"));
 
-        Assert.Equal(new[] { "EscalatedBy", "Reason" }, failed.Order());
+        Assert.Equal(new[] { "Reason" }, failed);
     }
 }

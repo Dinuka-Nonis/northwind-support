@@ -108,9 +108,9 @@ export interface TicketEscalation {
   escalatedAtUtc: string;
 }
 
+/** What the form sends. Who escalated is not in it: the API reads that from the sign-in token. */
 export interface EscalateTicketPayload {
   reason: string;
-  escalatedBy: string;
 }
 
 /** The response to escalating: the ticket as it is now, the new history row, and why. */
